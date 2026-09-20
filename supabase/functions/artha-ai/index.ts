@@ -141,7 +141,17 @@ async function callProvider(system: string, user: string) {
   const baseUrl = (Deno.env.get("AI_BASE_URL") || "https://api.openai.com/v1").replace(/\/$/, "");
   const model = Deno.env.get("AI_MODEL") || "gpt-4o-mini";
 
-  if (!apiKey && provider !== "ollama") return null;
+  console.log("AI provider configuration:", {
+    provider,
+    baseUrl,
+    model,
+    hasApiKey: Boolean(apiKey),
+  });
+
+  if (!apiKey && provider !== "ollama") {
+    console.error("AI provider skipped: API key is missing.");
+    return null;
+  }
 
   try {
     const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -160,10 +170,24 @@ async function callProvider(system: string, user: string) {
       }),
     });
 
-    if (!response.ok) return null;
-    const data = await response.json();
+    const responseText = await response.text();
+
+    console.log("AI provider response:", {
+      status: response.status,
+      statusText: response.statusText,
+      body: responseText.slice(0, 1000),
+    });
+
+    if (!response.ok) {
+      console.error("AI provider request failed.");
+      return null;
+    }
+
+    const data = JSON.parse(responseText);
+
     return data?.choices?.[0]?.message?.content?.trim() || null;
-  } catch {
+  } catch (error) {
+    console.error("AI provider exception:", String(error));
     return null;
   }
 }

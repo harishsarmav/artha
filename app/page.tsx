@@ -645,7 +645,6 @@ export default function Home() {
         setInsurance((items) =>
           edit ? items.map((v) => (v.id === edit.id ? item : v)) : [item, ...items]
         );
-        await syncCoverageFromInsurance(edit, item);
         closeModal();
         showToast("Insurance saved.");
         return;
