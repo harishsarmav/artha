@@ -740,14 +740,6 @@ export default function Home() {
     }
   }
 
-  async function syncCoverageFromInsurance(currentEdit: any, savedItem: any) {
-    const next = currentEdit ? insurance.map(v => v.id === currentEdit.id ? savedItem : v) : [savedItem, ...insurance];
-    const life = next.filter((v:any)=>/life|term/i.test(v.type)).reduce((a:number,v:any)=>a+numberValue(v.coverage),0);
-    const health = next.filter((v:any)=>/health|medical/i.test(v.type)).reduce((a:number,v:any)=>a+numberValue(v.coverage),0);
-    const payload = { life_cover:life, health_cover:health };
-    const { error } = await supabase.from("profiles").update(payload).eq("user_id", profile.id); if (!error) setProfile((p)=>({...p,lifeCover:life,healthCover:health}));
-  }
-
   async function removeRow(table: string, id: string) {
     if (!window.confirm("Delete this item from your Artha account?")) return;
     const { error } = await supabase.from(table).delete().eq("id", id).eq("user_id", profile.id);
