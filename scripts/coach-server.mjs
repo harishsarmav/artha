@@ -1,123 +1,351 @@
 import http from "node:http";
 
-const PORT = Number(process.env.AI_PORT || 8787);
-const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434/api/chat";
-const MODEL = process.env.OLLAMA_MODEL || "gpt-oss:20b";
+const PORT = 8787;
+const OLLAMA_BASE = "http://127.0.0.1:11434";
+const MODEL = "gpt-oss:20b";
 
-function clean(text) {
-  return String(text || "")
-    .replace(/\\###/g, "###")
-    .replace(/\\##/g, "##")
-    .replace(/\\#/g, "#")
-    .replace(/\\\*\*/g, "**")
-    .replace(/\\\*/g, "*")
-    .replace(/\\_/g, "_")
-    .trim();
-}
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "Content-Type, Authorization, apikey, x-client-info",
+  "Access-Control-Max-Age": "86400",
+};
 
-function json(res, status, body) {
+function sendJson(res, status, body) {
   res.writeHead(status, {
+    ...corsHeaders,
     "Content-Type": "application/json; charset=utf-8",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
   });
+
   res.end(JSON.stringify(body));
 }
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    req.on("data", chunk => {
-      data += chunk;
-      if (data.length > 2_000_000) {
-        reject(new Error("Request is too large."));
-        req.destroy();
-      }
-    });
-    req.on("end", () => resolve(data));
-    req.on("error", reject);
+function normalizeNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function deterministicCategory(description, transactionType = "Expense") {
+  const text = String(description || "").toLowerCase();
+
+  if (/salary|payroll|dividend|interest credit/.test(text)) {
+    return "Income";
+  }
+
+  if (/rent|housing|maintenance|society/.test(text)) {
+    return "Housing";
+  }
+
+  if (
+    /swiggy|zomato|restaurant|cafe|food|grocer|blinkit|zepto|bigbasket/.test(
+      text
+    )
+  ) {
+    return "Food";
+  }
+
+  if (/uber|ola|rapido|petrol|fuel|parking|metro|transport/.test(text)) {
+    return "Transport";
+  }
+
+  if (/electric|water|internet|mobile|jio|airtel|utility|gas/.test(text)) {
+    return "Utilities";
+  }
+
+  if (/hospital|pharmacy|medical|doctor|clinic|apollo/.test(text)) {
+    return "Healthcare";
+  }
+
+  if (/amazon|flipkart|myntra|shopping|mall/.test(text)) {
+    return "Shopping";
+  }
+
+  if (/netflix|prime|spotify|movie|cinema|entertainment/.test(text)) {
+    return "Entertainment";
+  }
+
+  if (/emi|loan|hdfc loan|sbi loan|card payment/.test(text)) {
+    return "Debt / EMI";
+  }
+
+  if (/sip|mutual fund|zerodha|groww|upstox|stock|etf|nps|ppf|fd/.test(text)) {
+    return "Investments";
+  }
+
+  if (String(transactionType).toLowerCase() === "income") {
+    return "Income";
+  }
+
+  return "Other";
+}
+
+function buildFallbackAnswer(question, financialContext) {
+  const f = financialContext?.financials || {};
+
+  const income = normalizeNumber(f.monthlyIncome);
+  const outflow = normalizeNumber(f.monthlyOutflow);
+  const freeCashFlow = normalizeNumber(f.freeCashFlow);
+  const savingsRate = normalizeNumber(f.savingsRate);
+  const cashSavings = normalizeNumber(f.cashSavings);
+  const emergency3 = normalizeNumber(f.emergencyFundTarget3Months);
+  const emergency6 = normalizeNumber(f.emergencyFundTarget6Months);
+
+  const lines = [
+    "### Artha's engine-based view",
+    "",
+  ];
+
+  if (income > 0) {
+    lines.push(
+      `Your normalized monthly income is **${Math.round(
+        income
+      ).toLocaleString("en-IN")}** and monthly outflow is **${Math.round(
+        outflow
+      ).toLocaleString("en-IN")}**.`
+    );
+
+    lines.push(
+      `That leaves free cash flow of **${Math.round(
+        freeCashFlow
+      ).toLocaleString("en-IN")}**, with a savings rate of **${savingsRate.toFixed(
+        1
+      )}%**.`
+    );
+  }
+
+  const q = String(question || "").toLowerCase();
+
+  if (/emergency|fund|cash/.test(q)) {
+    lines.push(
+      `Cash savings are **${Math.round(
+        cashSavings
+      ).toLocaleString("en-IN")}**, while the engine's 3–6 month target range is **${Math.round(
+        emergency3
+      ).toLocaleString("en-IN")}–${Math.round(
+        emergency6
+      ).toLocaleString("en-IN")}**.`
+    );
+  }
+
+  if (/loan|debt|emi/.test(q)) {
+    lines.push(
+      `Outstanding debt is **${Math.round(
+        normalizeNumber(f.outstandingDebt)
+      ).toLocaleString("en-IN")}** with monthly debt payments of **${Math.round(
+        normalizeNumber(f.debtPayments)
+      ).toLocaleString("en-IN")}**.`
+    );
+  }
+
+  if (/invest|sip|stock|mutual|portfolio/.test(q)) {
+    lines.push(
+      `Tracked investments are worth **${Math.round(
+        normalizeNumber(f.currentInvestmentValue)
+      ).toLocaleString("en-IN")}** versus **${Math.round(
+        normalizeNumber(f.investedAmount)
+      ).toLocaleString("en-IN")}** invested.`
+    );
+  }
+
+  lines.push(
+    "",
+    "This fallback uses Artha's deterministic engine facts only; no AI inference was used."
+  );
+
+  return lines.join("\n");
+}
+
+async function callOllama(system, user) {
+  const response = await fetch(`${OLLAMA_BASE}/api/chat`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      stream: false,
+      messages: [
+        {
+          role: "system",
+          content: system,
+        },
+        {
+          role: "user",
+          content: user,
+        },
+      ],
+    }),
   });
+
+  if (!response.ok) {
+    throw new Error(`Ollama returned HTTP ${response.status}.`);
+  }
+
+  const data = await response.json();
+
+  return data?.message?.content?.trim() || "";
 }
 
 const server = http.createServer(async (req, res) => {
-  if (req.method === "OPTIONS") return json(res, 204, {});
-  if (req.method !== "POST" || req.url !== "/api/coach") {
-    return json(res, 404, { error: "Not found." });
+  // ------------------------------------------------------------
+  // CORS PREFLIGHT
+  // ------------------------------------------------------------
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, corsHeaders);
+    res.end();
+    return;
   }
 
-  try {
-    const body = JSON.parse(await readBody(req));
-    const question = String(body.question || "").trim();
+  // ------------------------------------------------------------
+  // HEALTH
+  // ------------------------------------------------------------
+  if (req.method === "GET" && req.url === "/health") {
+    sendJson(res, 200, {
+      ok: true,
+      model: MODEL,
+      ollamaBase: OLLAMA_BASE,
+    });
+    return;
+  }
 
-    if (!question) {
-      return json(res, 400, { error: "Question is required." });
-    }
+  // ------------------------------------------------------------
+  // AI COACH
+  // ------------------------------------------------------------
+  if (req.method === "POST" && req.url === "/api/coach") {
+    try {
+      let raw = "";
 
-    const financialContext = body.financialContext || {};
-    const systemPrompt = `
-You are Artha, an AI personal finance coach for users in India.
+      req.on("data", (chunk) => {
+        raw += chunk;
+      });
 
-Your job is to help users understand their personal finances in simple, practical language.
+      await new Promise((resolve, reject) => {
+        req.on("end", resolve);
+        req.on("error", reject);
+      });
+
+      let body = {};
+
+      try {
+        body = raw ? JSON.parse(raw) : {};
+      } catch {
+        sendJson(res, 400, {
+          error: "Invalid JSON request body.",
+        });
+        return;
+      }
+
+      const mode = String(body.mode || "chat");
+      const question = String(body.question || "").trim();
+
+      if (!question) {
+        sendJson(res, 400, {
+          error: "A question is required.",
+        });
+        return;
+      }
+
+      // ----------------------------------------------------------
+      // TRANSACTION CATEGORIZATION
+      // ----------------------------------------------------------
+      if (mode === "categorize") {
+        const category = deterministicCategory(
+          question,
+          body.transactionType || "Expense"
+        );
+
+        sendJson(res, 200, {
+          category,
+          confidence: category === "Other" ? 0.25 : 0.85,
+          reason:
+            category === "Other"
+              ? "Not enough information for a reliable deterministic category."
+              : "Matched a deterministic transaction rule.",
+        });
+
+        return;
+      }
+
+      const financialContext = body.financialContext || {};
+      const facts = JSON.stringify(
+        financialContext.financials || {},
+        null,
+        2
+      );
+
+      const system = `
+You are Artha, a careful Indian personal-finance coach.
+
+The Financial Engine is the source of truth.
+
+Use only the supplied financial facts and records.
 
 Rules:
-1. Give educational financial guidance.
-2. Do not claim to be a SEBI-registered investment adviser.
-3. Do not guarantee returns.
-4. Do not tell users to definitely buy, sell, or hold a specific security.
-5. Explain risk, diversification, liquidity, fees, taxes and time horizon when relevant.
-6. Use only the supplied financial context. Never invent missing data.
-7. Never infer a loan or expense category that is not present in the supplied data.
-8. If information is missing, say what is missing.
-9. Use INR and Indian financial terminology where appropriate.
-10. For insurance, explain coverage factors rather than endorsing a provider.
-11. Prefer concise headings and bullets. Use tables when they improve readability.
-12. When Artha supplies calculated figures, use those figures rather than inventing or changing them.
+- Never invent financial facts.
+- Never silently change calculated numbers.
+- Do not pretend to have access to bank, broker, tax, or insurance systems.
+- Explain financial concepts clearly.
+- For investments and insurance, provide educational decision factors rather than pretending to provide regulated product-specific advice.
+- If information is missing, explicitly say so.
+- Keep the response practical and readable.
+- Use markdown.
 
-Financial context:
-${JSON.stringify(financialContext, null, 2)}
+CALCULATED FINANCIAL FACTS:
+${facts}
 `;
 
-    const response = await fetch(OLLAMA_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: question },
-        ],
-        stream: false,
-        options: {
-          temperature: 0.3,
-          num_ctx: 2048,
-          num_predict: 800,
-        },
-      }),
-    });
+      let answer = "";
 
-    if (!response.ok) {
-      const details = await response.text();
-      return json(res, 502, { error: "Ollama request failed.", details });
+      try {
+        answer = await callOllama(system, question);
+      } catch (ollamaError) {
+        console.error("Ollama error:", ollamaError);
+
+        answer = buildFallbackAnswer(question, financialContext);
+      }
+
+      sendJson(res, 200, {
+        answer,
+        provider:
+          answer.includes("engine-based view")
+            ? "deterministic"
+            : "ollama",
+      });
+
+      return;
+    } catch (error) {
+      console.error("Coach gateway error:", error);
+
+      sendJson(res, 500, {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to process the AI request.",
+      });
+
+      return;
     }
-
-    const data = await response.json();
-    return json(res, 200, {
-      answer: clean(data.message?.content || "I could not generate a response."),
-      provider: "ollama",
-      model: MODEL,
-    });
-  } catch (error) {
-    return json(res, 502, {
-      error:
-        error instanceof Error
-          ? error.message
-          : "Artha could not connect to Ollama. Make sure Ollama is running.",
-    });
   }
+
+  // ------------------------------------------------------------
+  // NOT FOUND
+  // ------------------------------------------------------------
+  sendJson(res, 404, {
+    error: "Not found",
+  });
 });
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Artha AI proxy listening on http://localhost:${PORT}`);
-  console.log(`Ollama model: ${MODEL}`);
+server.listen(PORT, "127.0.0.1", () => {
+  console.log("");
+  console.log("==========================================");
+  console.log(" Artha Local AI Gateway");
+  console.log("==========================================");
+  console.log(` Gateway : http://localhost:${PORT}`);
+  console.log(` Health  : http://localhost:${PORT}/health`);
+  console.log(` Coach   : POST http://localhost:${PORT}/api/coach`);
+  console.log(` Ollama  : ${OLLAMA_BASE}`);
+  console.log(` Model   : ${MODEL}`);
+  console.log("==========================================");
+  console.log("");
 });

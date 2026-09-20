@@ -1,6 +1,8 @@
-node_modules/
-.next/
-out/
+node_modules
+.next
+out
 .env
 .env.local
+supabase/functions/.env
 *.log
+.DS_Store
