@@ -1,1 +1,1 @@
-export * from "../../shared/financial-engine";
+export * from "./shared/financial-engine";

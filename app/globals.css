@@ -149,6 +149,14 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 @media(max-width:560px){.headerInner{gap:8px}.headerActions{gap:8px}.themeToggle{padding:8px}.themeToggleLabel{display:none}.headerInner{min-height:66px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
 
+/* Quieter brand treatment: keep the palette but reduce competing green gradients. */
+.appHeader{background:#123C3A}
+.brand{font-size:25px;letter-spacing:-.8px}
+.hero{background:linear-gradient(135deg,#fff 0%,#F7F5EF 100%);border-color:#E2E5DD}
+.primary{background:#1F6B5C}
+.coach{background:linear-gradient(145deg,#fff 0%,#F7F5EF 100%);border-color:#E2E5DD}
+[data-theme="dark"] .appHeader{background:#0D2925}
+
 /* Public release notes */
 .releasePage{min-height:100vh;padding:0 24px 26px;background:var(--page);color:var(--ink)}
 .releaseHeader{width:min(920px,100%);min-height:76px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line)}

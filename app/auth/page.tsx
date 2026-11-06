@@ -61,7 +61,7 @@ export default function AuthPage() {
     <main className="authPage">
       <div className="authGlow authGlowA" /><div className="authGlow authGlowB" />
       <section className="authShell">
-        <div className="authBrand"><div className="authBrandMark">✦</div><div><div className="authBrandName">Artha</div><div className="authBrandTag">Your AI Financial Coach</div></div></div>
+        <div className="authBrand"><div className="authBrandMark">✦</div><div><div className="authBrandName">Artha Compass</div><div className="authBrandTag">Personal finance &amp; planning</div></div></div>
         <div className="authCard">
           <div className="authHeader"><div className="authEyebrow">{mode === "login" ? "WELCOME BACK" : "GET STARTED"}</div><h1>{mode === "login" ? "Welcome back 👋" : "Take control of your money."}</h1><p>{mode === "login" ? "Sign in to continue your private financial workspace." : "Create your secure personal financial workspace."}</p></div>
           <form onSubmit={handleSubmit} className="authForm">
@@ -77,7 +77,7 @@ export default function AuthPage() {
         </div>
         <div className="authTrust">🔐 Your financial data is stored in your Supabase account and protected by row-level access policies.</div>
         <div className="authReleaseLink"><Link href="/release-notes/">Read Artha release notes <span aria-hidden="true">↗</span></Link></div>
-        <div className="authCopyright">Artha · Your AI Financial Coach · © 2026</div>
+        <div className="authCopyright">Artha Compass · Personal finance &amp; planning · © 2026</div>
       </section>
     </main>
   );

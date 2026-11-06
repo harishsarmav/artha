@@ -16,7 +16,7 @@ export default function ReleaseNotesPage() {
   return (
     <main className="releasePage">
       <header className="releaseHeader">
-        <Link className="releaseBrand" href="/" aria-label="Artha home"><span aria-hidden="true">✦</span> Artha</Link>
+        <Link className="releaseBrand" href="/" aria-label="Artha Compass home"><span aria-hidden="true">✦</span> Artha Compass</Link>
         <Link className="releaseBack" href="/">Back to Artha <span aria-hidden="true">↗</span></Link>
       </header>
 
@@ -28,7 +28,19 @@ export default function ReleaseNotesPage() {
 
       <section className="releaseList" aria-label="Artha product updates">
         <article className="releaseEntry releaseLatest">
-          <div className="releaseMeta"><time dateTime="2026-09-30">30 September 2026</time><span>Latest update</span></div>
+          <div className="releaseMeta"><time dateTime="2026-11-06">6 November 2026</time><span>Latest update</span></div>
+          <h2>Calculations start with your information</h2>
+          <p className="releaseSummary">Artha Compass no longer fills in personal planning assumptions or a sample savings amount for you.</p>
+          <ul>
+            <li>Age, risk profile, investment horizon, and primary goal stay unset until you provide them.</li>
+            <li>Dashboard health and cash-flow views show what information is missing instead of presenting zero-based results as financial conclusions.</li>
+            <li>Your financial records save to your account when you submit their forms. A changed scenario amount is remembered only in this browser.</li>
+            <li>The dashboard greets you by your account name and uses the Artha Compass name with a quieter deep-teal header.</li>
+          </ul>
+        </article>
+
+        <article className="releaseEntry">
+          <div className="releaseMeta"><time dateTime="2026-09-30">30 September 2026</time><span>Visual refresh</span></div>
           <h2>A calmer, clearer Artha</h2>
           <p className="releaseSummary">A visual refresh focused on trust, readability, and everyday use.</p>
           <ul>
@@ -50,8 +62,8 @@ export default function ReleaseNotesPage() {
         </article>
       </section>
 
-      <p className="releasePrivacy">Artha release notes describe product changes only. They do not access or display your financial records.</p>
-      <footer className="releaseFooter"><span>Artha · Your AI Financial Coach</span><Link href="/auth/">Sign in or create an account</Link></footer>
+      <p className="releasePrivacy">Artha Compass release notes describe product changes only. They do not access or display your financial records.</p>
+      <footer className="releaseFooter"><span>Artha Compass · Personal finance &amp; planning</span><Link href="/auth/">Sign in or create an account</Link></footer>
     </main>
   );
 }
