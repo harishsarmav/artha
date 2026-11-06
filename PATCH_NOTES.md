@@ -1,5 +1,14 @@
 # Artha v0.6 security patch notes
 
+## v0.7.1 — user-provided calculator inputs
+- Removed prefilled age, risk profile, investment horizon, and primary goal assumptions from the profile and planning calculations.
+- Reset the extra-savings scenario slider to zero; it is disabled until cash-flow records exist and is saved to browser storage only after the user changes it.
+- Replaced empty portfolio zeroes and health labels with clear prompts until relevant data is provided.
+- Existing account records continue to load and update in Supabase when the user submits a form; no data-clearing migration was added.
+- Added this update to the public release notes.
+- Made the greeting fall back to the signed-in account name when the profile row contains an empty name.
+- Extended the visible product name to “Artha Compass” and softened the header and hero gradients while keeping the teal palette.
+
 ## Changes included
 - Removed the public Supabase connection-test route/component and the unused Next.js API coach route.
 - Removed old generated `out/` build artifacts, Git history/metadata, and Supabase CLI `.temp` metadata from this source archive.

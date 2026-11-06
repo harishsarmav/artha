@@ -11,6 +11,8 @@ Artha is a personal finance workspace built around one core rule: **the Financia
 - Deterministic cash-flow, savings rate, debt-service, emergency-fund, investment and goal calculations
 - Twelve-month run-rate projection (not a market prediction)
 - Scenario lab for extra monthly savings
+- Financial summaries stay in an unconfigured state until the user has entered relevant data; profile assumptions are not prefilled
+- Portfolio records are saved only when their forms are submitted; a changed scenario amount is stored locally in that browser
 - Transaction entry and AI/deterministic categorization
 - AI coach, financial review and scenario explanation through one gateway contract
 - Local Ollama gateway for development
