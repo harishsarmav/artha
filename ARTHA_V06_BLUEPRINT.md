@@ -69,3 +69,4 @@ The Financial Engine is the source of truth for arithmetic. AI receives calculat
 ## Security model
 
 Browser code only contains Supabase publishable credentials. RLS protects user-owned rows. Production AI provider secrets live only in Edge Function secrets. The Edge Function ignores client-supplied financial totals and recalculates the user's facts from the database before calling the AI provider.
+
