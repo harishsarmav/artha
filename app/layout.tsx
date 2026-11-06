@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Artha — Your AI Financial Coach",
-  description: "Understand your money, track your finances and get practical AI-powered guidance.",
+  title: "Artha — Plan with confidence",
+  description: "A thoughtful personal finance and life planning assistant.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -5,10 +5,11 @@ const OLLAMA_BASE = "http://127.0.0.1:11434";
 const MODEL = "gpt-oss:20b";
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin": "http://localhost:3000",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers":
     "Content-Type, Authorization, apikey, x-client-info",
+  "Vary": "Origin",
   "Access-Control-Max-Age": "86400",
 };
 
@@ -198,18 +199,6 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ------------------------------------------------------------
-  // HEALTH
-  // ------------------------------------------------------------
-  if (req.method === "GET" && req.url === "/health") {
-    sendJson(res, 200, {
-      ok: true,
-      model: MODEL,
-      ollamaBase: OLLAMA_BASE,
-    });
-    return;
-  }
-
-  // ------------------------------------------------------------
   // AI COACH
   // ------------------------------------------------------------
   if (req.method === "POST" && req.url === "/api/coach") {
@@ -300,7 +289,7 @@ ${facts}
       try {
         answer = await callOllama(system, question);
       } catch (ollamaError) {
-        console.error("Ollama error:", ollamaError);
+        // Do not log request context or provider error payloads.
 
         answer = buildFallbackAnswer(question, financialContext);
       }
@@ -315,13 +304,10 @@ ${facts}
 
       return;
     } catch (error) {
-      console.error("Coach gateway error:", error);
+      // Keep request/provider details out of local logs.
 
       sendJson(res, 500, {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unable to process the AI request.",
+        error: "Unable to process the AI request. Please try again.",
       });
 
       return;
@@ -337,15 +323,5 @@ ${facts}
 });
 
 server.listen(PORT, "127.0.0.1", () => {
-  console.log("");
-  console.log("==========================================");
-  console.log(" Artha Local AI Gateway");
-  console.log("==========================================");
-  console.log(` Gateway : http://localhost:${PORT}`);
-  console.log(` Health  : http://localhost:${PORT}/health`);
-  console.log(` Coach   : POST http://localhost:${PORT}/api/coach`);
-  console.log(` Ollama  : ${OLLAMA_BASE}`);
-  console.log(` Model   : ${MODEL}`);
-  console.log("==========================================");
-  console.log("");
+  // Local-only listener; no request or financial data is logged.
 });

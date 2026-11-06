@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -51,6 +52,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const [profileMenu, setProfileMenu] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">("light");
   const [modal, setModal] = useState<ModalType>("");
   const [edit, setEdit] = useState<any>(null);
   const [form, setForm] = useState<FormState>({});
@@ -71,6 +73,23 @@ export default function Home() {
   const [scenarioExtra, setScenarioExtra] = useState(5000);
   const [categorizing, setCategorizing] = useState(false);
 
+  useEffect(() => {
+    let savedTheme: string | null = null;
+    try { savedTheme = window.localStorage.getItem("artha-theme"); } catch { /* Use the system preference when browser storage is unavailable. */ }
+    const initialTheme = savedTheme === "dark" || savedTheme === "light"
+      ? savedTheme
+      : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    setTheme(initialTheme);
+    document.documentElement.dataset.theme = initialTheme;
+  }, []);
+
+  const toggleTheme = () => {
+    const nextTheme = theme === "dark" ? "light" : "dark";
+    setTheme(nextTheme);
+    document.documentElement.dataset.theme = nextTheme;
+    try { window.localStorage.setItem("artha-theme", nextTheme); } catch { /* The selected theme still applies for this visit. */ }
+  };
+
   const closeModal = () => { setModal(""); setEdit(null); setForm({}); setSecurityPassword(""); setSecurityConfirm(""); };
   const showToast = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2600); };
   const setField = (key: string, value: string | number) => setForm((old) => ({ ...old, [key]: value }));
@@ -78,7 +97,7 @@ export default function Home() {
   const loadAll = useCallback(async (userId: string, userName: string) => {
     setLoadingData(true); setError("");
     const [profileRes, incomeRes, expenseRes, investmentRes, loanRes, insuranceRes, goalRes, txRes] = await Promise.all([
-      supabase.from("profiles").select("*").eq("user_id", userId).maybeSingle(),
+      supabase.from("profiles").select("*").eq("id", userId).maybeSingle(),
       supabase.from("income").select("*").eq("user_id", userId).order("created_at", { ascending: false }),
       supabase.from("expenses").select("*").eq("user_id", userId).order("created_at", { ascending: false }),
       supabase.from("investments").select("*").eq("user_id", userId).order("created_at", { ascending: false }),
@@ -101,7 +120,7 @@ export default function Home() {
         const p = local("artha-profile");
         const nextProfile = { id: userId, ...profileDefaults, ...p, name: p?.name || userName };
         const legacyProfilePayload = {
-          full_name: nextProfile.name,
+          name: nextProfile.name,
           age: numberValue(nextProfile.age),
           dependents: numberValue(nextProfile.dependents),
           country: nextProfile.country || "India",
@@ -112,20 +131,20 @@ export default function Home() {
           health_cover: numberValue(nextProfile.healthCover),
           cash_savings: numberValue(nextProfile.cashSavings),
         };
-        const legacyProfileExisting = await supabase.from("profiles").select("user_id").eq("user_id", userId).maybeSingle();
+        const legacyProfileExisting = await supabase.from("profiles").select("id").eq("id", userId).maybeSingle();
         if (legacyProfileExisting.error) throw legacyProfileExisting.error;
         if (legacyProfileExisting.data) {
-          const legacyProfileUpdate = await supabase.from("profiles").update(legacyProfilePayload).eq("user_id", userId);
+          const legacyProfileUpdate = await supabase.from("profiles").update(legacyProfilePayload).eq("id", userId);
           if (legacyProfileUpdate.error) throw legacyProfileUpdate.error;
         } else {
-          const legacyProfileInsert = await supabase.from("profiles").insert({ ...legacyProfilePayload, user_id: userId });
+          const legacyProfileInsert = await supabase.from("profiles").insert({ ...legacyProfilePayload, id: userId });
           if (legacyProfileInsert.error) throw legacyProfileInsert.error;
         }
         for (const row of local("artha-income") || []) {
           const result = await supabase.from("income").insert({
             user_id: userId,
-            source: row.name || "Income",
-            description: row.type || "Other",
+            name: row.name || "Income",
+            type: row.type || "Other",
             amount: numberValue(row.amount),
             frequency: String(row.frequency || "Monthly"),
           });
@@ -134,11 +153,10 @@ export default function Home() {
         for (const row of local("artha-expenses") || []) {
           const result = await supabase.from("expenses").insert({
             user_id: userId,
-            description: row.name || "Expense",
+            name: row.name || "Expense",
             category: row.category || "Other",
             amount: numberValue(row.amount),
             frequency: String(row.frequency || "Monthly"),
-            is_essential: false,
           });
           if (result.error) throw result.error;
         }
@@ -148,7 +166,7 @@ export default function Home() {
             name: row.name || "Investment",
             type: row.type || "Other",
             category: row.category || "Other",
-            contribution_type: row.mode || "Lump sum",
+            mode: row.mode || "Lump sum",
             monthly_amount: numberValue(row.monthlyAmount),
             invested_amount: numberValue(row.investedAmount),
             current_value: numberValue(row.currentValue),
@@ -160,13 +178,12 @@ export default function Home() {
           const result = await supabase.from("loans").insert({
             user_id: userId,
             type: row.type || "Other",
-            description: row.name || "Loan",
+            name: row.name || "Loan",
             original_amount: numberValue(row.originalAmount),
-            outstanding_amount: numberValue(row.outstanding),
-            emi_amount: numberValue(row.emi),
+            outstanding: numberValue(row.outstanding),
+            emi: numberValue(row.emi),
             interest_rate: numberValue(row.interestRate),
             tenure_months: numberValue(row.tenureMonths),
-            remaining_months: numberValue(row.tenureMonths),
           });
           if (result.error) throw result.error;
         }
@@ -174,7 +191,6 @@ export default function Home() {
           if (!row.targetDate) continue;
           const result = await supabase.from("goals").insert({
             user_id: userId,
-            type: row.type || "Other",
             name: row.name || "Goal",
             target_amount: numberValue(row.targetAmount),
             current_amount: numberValue(row.currentAmount),
@@ -185,20 +201,23 @@ export default function Home() {
         ["artha-profile", "artha-income", "artha-expenses", "artha-investments", "artha-loans", "artha-goals"].forEach((key) => localStorage.removeItem(key));
         showToast("Your previous Artha data was moved into your account.");
         return loadAll(userId, userName);
-      } catch (migrationError) { console.warn("Artha legacy migration skipped", migrationError); }
+      } catch {
+        // Keep raw migration/database errors out of the browser console.
+        setError("Some older local data could not be migrated. Your original browser data has been kept.");
+      }
     }
 
     setProfile(profileRes.data ? normalizeProfile(profileRes.data, userName) : { id: userId, ...profileDefaults, name: userName });
     setIncome(mapRows(incomeRes.data).map((r: any) => ({
       id: r.id,
-      name: r.source || "Income",
-      type: r.description || "Other",
+      name: r.name || "Income",
+      type: r.type || "Other",
       amount: numberValue(r.amount),
       frequency: r.frequency || "Monthly",
     })));
     setExpenses(mapRows(expenseRes.data).map((r: any) => ({
       id: r.id,
-      name: r.description || "Expense",
+      name: r.name || "Expense",
       category: r.category || "Other",
       amount: numberValue(r.amount),
       frequency: r.frequency || "Monthly",
@@ -208,7 +227,7 @@ export default function Home() {
       name: r.name || r.fund_name || "Investment",
       type: r.type || "Other",
       category: r.category || "Other",
-      mode: r.contribution_type || "Lump sum",
+      mode: r.mode || "Lump sum",
       monthlyAmount: numberValue(r.monthly_amount),
       investedAmount: numberValue(r.invested_amount),
       currentValue: numberValue(r.current_value),
@@ -216,21 +235,21 @@ export default function Home() {
     })));
     setLoans(mapRows(loanRes.data).map((r: any) => ({
       id: r.id,
-      name: r.description || r.lender || r.type || "Loan",
+      name: r.name || r.type || "Loan",
       type: r.type || "Other",
       originalAmount: numberValue(r.original_amount),
-      outstanding: numberValue(r.outstanding_amount),
-      emi: numberValue(r.emi_amount),
+      outstanding: numberValue(r.outstanding),
+      emi: numberValue(r.emi),
       interestRate: numberValue(r.interest_rate),
-      tenureMonths: numberValue(r.remaining_months ?? r.tenure_months),
+      tenureMonths: numberValue(r.tenure_months),
     })));
     setInsurance(mapRows(insuranceRes.data).map((r: any) => ({
       id: r.id,
       type: r.type || "Other",
       provider: r.provider || "",
-      coverage: numberValue(r.coverage_amount),
-      premium: numberValue(r.premium_amount),
-      frequency: r.premium_frequency || "Yearly",
+      coverage: numberValue(r.coverage),
+      premium: numberValue(r.premium),
+      frequency: r.frequency || "Yearly",
       renewalDate: r.renewal_date,
     })));
     setGoals(mapRows(goalRes.data).map((r: any) => ({
@@ -262,7 +281,7 @@ export default function Home() {
       setAuthEmail(data.session.user.email || "");
       const name = data.session.user.user_metadata?.full_name || data.session.user.email?.split("@")[0] || "there";
       try { await loadAll(data.session.user.id, name); }
-      catch (loadError) { setError(loadError instanceof Error ? loadError.message : "Unable to load your financial data."); setLoadingData(false); }
+      catch { setError("Unable to load your financial data. Please check your connection and try again."); setLoadingData(false); }
     };
     bootstrap();
     const { data: listener } = supabase.auth.onAuthStateChange((event) => { if (event === "SIGNED_OUT") router.replace("/auth"); });
@@ -424,7 +443,7 @@ export default function Home() {
 
       if (modal === "profile") {
         const payload = {
-          full_name: String(form.name || "").trim(),
+          name: String(form.name || "").trim(),
           age: numberValue(form.age),
           dependents: numberValue(form.dependents),
           country: String(form.country || "India").trim(),
@@ -441,7 +460,7 @@ export default function Home() {
         const updated = await supabase
           .from("profiles")
           .update(payload)
-          .eq("user_id", userId)
+          .eq("id", userId)
           .select("*")
           .maybeSingle();
 
@@ -453,7 +472,7 @@ export default function Home() {
         if (!savedProfile) {
           const inserted = await supabase
             .from("profiles")
-            .insert({ ...payload, user_id: userId })
+            .insert({ ...payload, id: userId })
             .select("*")
             .single();
 
@@ -461,18 +480,18 @@ export default function Home() {
           savedProfile = inserted.data;
         }
 
-        setProfile(normalizeProfile(savedProfile, payload.full_name));
+        setProfile(normalizeProfile(savedProfile, payload.name));
         closeModal();
         showToast("Profile saved successfully.");
         return;
       }
 
       if (modal === "income") {
-        const source = String(form.name || "Income").trim();
-        const description = String(form.type || "Other").trim();
+        const name = String(form.name || "Income").trim();
+        const type = String(form.type || "Other").trim();
         const payload = {
-          source,
-          description,
+          name,
+          type,
           amount: numberValue(form.amount),
           frequency: String(form.frequency || "Monthly"),
         };
@@ -487,8 +506,8 @@ export default function Home() {
         const row = result.data;
         const item: Income = {
           id: row.id,
-          name: row.source || "Income",
-          type: row.description || "Other",
+          name: row.name || "Income",
+          type: row.type || "Other",
           amount: numberValue(row.amount),
           frequency: row.frequency || "Monthly",
         };
@@ -502,13 +521,12 @@ export default function Home() {
       }
 
       if (modal === "expense") {
-        const description = String(form.name || "Expense").trim();
+        const name = String(form.name || "Expense").trim();
         const payload = {
-          description,
+          name,
           category: String(form.category || "Other"),
           amount: numberValue(form.amount),
           frequency: String(form.frequency || "Monthly"),
-          is_essential: false,
         };
 
         const result = edit
@@ -521,7 +539,7 @@ export default function Home() {
         const row = result.data;
         const item: Expense = {
           id: row.id,
-          name: row.description || "Expense",
+          name: row.name || "Expense",
           category: row.category || "Other",
           amount: numberValue(row.amount),
           frequency: row.frequency || "Monthly",
@@ -540,7 +558,7 @@ export default function Home() {
           name: String(form.name || "Investment"),
           type: String(form.type || "Other"),
           category: String(form.category || "Other"),
-          contribution_type: String(form.mode || "Lump sum"),
+          mode: String(form.mode || "Lump sum"),
           monthly_amount: numberValue(form.monthlyAmount),
           invested_amount: numberValue(form.investedAmount),
           current_value: numberValue(form.currentValue),
@@ -560,7 +578,7 @@ export default function Home() {
           name: row.name || row.fund_name || "Investment",
           type: row.type || "Other",
           category: row.category || "Other",
-          mode: row.contribution_type || "Lump sum",
+          mode: row.mode || "Lump sum",
           monthlyAmount: numberValue(row.monthly_amount),
           investedAmount: numberValue(row.invested_amount),
           currentValue: numberValue(row.current_value),
@@ -578,13 +596,12 @@ export default function Home() {
       if (modal === "loan") {
         const payload = {
           type: String(form.type || "Other"),
-          description: String(form.name || "Loan"),
+          name: String(form.name || "Loan"),
           original_amount: numberValue(form.originalAmount),
-          outstanding_amount: numberValue(form.outstanding),
-          emi_amount: numberValue(form.emi),
+          outstanding: numberValue(form.outstanding),
+          emi: numberValue(form.emi),
           interest_rate: numberValue(form.interestRate),
           tenure_months: numberValue(form.tenureMonths),
-          remaining_months: numberValue(form.tenureMonths),
         };
 
         const result = edit
@@ -597,13 +614,13 @@ export default function Home() {
         const row = result.data;
         const item: Loan = {
           id: row.id,
-          name: row.description || row.lender || row.type || "Loan",
+          name: row.name || row.type || "Loan",
           type: row.type || "Other",
           originalAmount: numberValue(row.original_amount),
-          outstanding: numberValue(row.outstanding_amount),
-          emi: numberValue(row.emi_amount),
+          outstanding: numberValue(row.outstanding),
+          emi: numberValue(row.emi),
           interestRate: numberValue(row.interest_rate),
-          tenureMonths: numberValue(row.remaining_months ?? row.tenure_months),
+          tenureMonths: numberValue(row.tenure_months),
         };
 
         setLoans((items) =>
@@ -618,9 +635,9 @@ export default function Home() {
         const payload = {
           type: String(form.type || "Other"),
           provider: String(form.provider || "").trim() || null,
-          coverage_amount: numberValue(form.coverage),
-          premium_amount: numberValue(form.premium),
-          premium_frequency: String(form.frequency || "Yearly"),
+          coverage: numberValue(form.coverage),
+          premium: numberValue(form.premium),
+          frequency: String(form.frequency || "Yearly"),
           renewal_date: String(form.renewalDate || "") || null,
         };
 
@@ -636,15 +653,16 @@ export default function Home() {
           id: row.id,
           type: row.type || "Other",
           provider: row.provider || "",
-          coverage: numberValue(row.coverage_amount),
-          premium: numberValue(row.premium_amount),
-          frequency: row.premium_frequency || "Yearly",
+          coverage: numberValue(row.coverage),
+          premium: numberValue(row.premium),
+          frequency: row.frequency || "Yearly",
           renewalDate: row.renewal_date,
         };
 
         setInsurance((items) =>
           edit ? items.map((v) => (v.id === edit.id ? item : v)) : [item, ...items]
         );
+        await syncCoverageFromInsurance(edit, item);
         closeModal();
         showToast("Insurance saved.");
         return;
@@ -652,7 +670,6 @@ export default function Home() {
 
       if (modal === "goal") {
         const payload = {
-          type: String(form.type || "Other"),
           name: String(form.name || "Goal"),
           target_amount: numberValue(form.targetAmount),
           current_amount: numberValue(form.currentAmount),
@@ -717,33 +734,26 @@ export default function Home() {
         showToast("Transaction saved.");
         return;
       }
-    } catch (saveError: any) {
-      const message = saveError?.message || saveError?.error_description || "Unable to save changes.";
-      const details = saveError?.details ? ` Details: ${saveError.details}` : "";
-      const hint = saveError?.hint ? ` Hint: ${saveError.hint}` : "";
-      const code = saveError?.code ? ` [${saveError.code}]` : "";
-      const status = saveError?.status ? ` (HTTP ${saveError.status})` : "";
-
-      let rawText = "";
-      try {
-        rawText = JSON.stringify(saveError, Object.getOwnPropertyNames(saveError));
-      } catch {
-        rawText = String(saveError);
-      }
-
-      const errorText = `${message}${code}${status}${details}${hint}`;
-      console.error(`Artha save error: ${errorText}`);
-      console.error("Artha save error raw:", rawText);
-      setError(errorText === "Unable to save changes." && rawText ? `${errorText} Raw: ${rawText}` : errorText);
+    } catch {
+      // Keep database diagnostics and raw server responses out of the browser UI.
+      setError("Unable to save changes. Please check your connection and try again.");
     } finally {
       setSaveBusy(false);
     }
   }
 
+  async function syncCoverageFromInsurance(currentEdit: any, savedItem: any) {
+    const next = currentEdit ? insurance.map(v => v.id === currentEdit.id ? savedItem : v) : [savedItem, ...insurance];
+    const life = next.filter((v:any)=>/life|term/i.test(v.type)).reduce((a:number,v:any)=>a+numberValue(v.coverage),0);
+    const health = next.filter((v:any)=>/health|medical/i.test(v.type)).reduce((a:number,v:any)=>a+numberValue(v.coverage),0);
+    const payload = { life_cover:life, health_cover:health };
+    const { error } = await supabase.from("profiles").update(payload).eq("id", profile.id); if (!error) setProfile((p)=>({...p,lifeCover:life,healthCover:health}));
+  }
+
   async function removeRow(table: string, id: string) {
     if (!window.confirm("Delete this item from your Artha account?")) return;
     const { error } = await supabase.from(table).delete().eq("id", id).eq("user_id", profile.id);
-    if (error) { setError(error.message); return; }
+    if (error) { setError("Unable to delete this item. Please try again."); return; }
     if (table === "income") setIncome(v=>v.filter(x=>x.id!==id));
     if (table === "expenses") setExpenses(v=>v.filter(x=>x.id!==id));
     if (table === "investments") setInvestments(v=>v.filter(x=>x.id!==id));
@@ -753,7 +763,7 @@ export default function Home() {
       setInsurance(nextInsurance);
       const life = nextInsurance.filter(v=>/life|term/i.test(v.type)).reduce((a,v)=>a+numberValue(v.coverage),0);
       const health = nextInsurance.filter(v=>/health|medical/i.test(v.type)).reduce((a,v)=>a+numberValue(v.coverage),0);
-      const coverageUpdate = await supabase.from("profiles").update({ life_cover: life, health_cover: health }).eq("user_id", profile.id);
+      const coverageUpdate = await supabase.from("profiles").update({ life_cover: life, health_cover: health }).eq("id", profile.id);
       if (!coverageUpdate.error) setProfile(p=>({...p, lifeCover: life, healthCover: health}));
     }
     if (table === "goals") setGoals(v=>v.filter(x=>x.id!==id));
@@ -804,7 +814,7 @@ export default function Home() {
           question: nextQuestion,
           mode,
           scenario: scenarioPayload,
-          financialContext: aiContext,
+          ...(isLocal ? { financialContext: aiContext } : {}),
         }),
       });
 
@@ -930,7 +940,7 @@ export default function Home() {
 
   async function handleSignOut() {
     const { error } = await supabase.auth.signOut({ scope:"local" });
-    if (error) { setError(error.message); return; }
+    if (error) { setError("Unable to sign out. Please try again."); return; }
     router.replace("/auth"); router.refresh();
   }
 
@@ -938,7 +948,7 @@ export default function Home() {
     if (securityPassword.length < 8) { setError("Use at least 8 characters."); return; }
     if (securityPassword !== securityConfirm) { setError("Passwords do not match."); return; }
     const { error } = await supabase.auth.updateUser({ password: securityPassword });
-    if (error) { setError(error.message); return; }
+    if (error) { setError("Unable to update your password. Please try again."); return; }
     closeModal(); showToast("Password updated.");
   }
 
@@ -946,14 +956,56 @@ export default function Home() {
 
   return (
     <main className="shell">
-      <header className="appHeader"><div className="headerInner"><div className="brandWrap"><div className="brandSymbol">✦</div><div><div className="brand">Artha</div><div className="tag">Your AI Financial Coach</div></div></div><div className="headerActions"><div className="secureBadge"><span>●</span> Secure</div><div className="profileArea"><button className="profileButton" onClick={()=>setProfileMenu(v=>!v)} aria-expanded={profileMenu}><span className="profileAvatar">{(profile.name||"A").charAt(0).toUpperCase()}</span><span className="profileButtonText">{profile.name || "Profile"}</span><span className="profileChevron">{profileMenu?"⌃":"⌄"}</span></button>{profileMenu && <div className="profileMenu"><button className="profileMenuUser profileMenuUserButton" onClick={()=>{setProfileMenu(false);openModal("profile");}}><span className="profileMenuAvatar">{(profile.name||"A").charAt(0).toUpperCase()}</span><span><strong>{profile.name||"Your profile"}</strong><small>Personal account</small></span></button><div className="profileMenuDivider"/><button className="profileMenuItem" onClick={()=>{setProfileMenu(false);openModal("profile");}}>👤 <span>Profile settings</span></button><button className="profileMenuItem" onClick={()=>{setProfileMenu(false);openModal("security");}}>🔐 <span>Account & security</span></button><button className="profileMenuItem signOut" onClick={handleSignOut}>↪ <span>Sign out</span></button></div>}</div></div></div></header>
+      <header className="appHeader"><div className="headerInner"><div className="brandWrap"><div className="brandSymbol" aria-hidden="true">✦</div><div><div className="brand">Artha</div><div className="tag">Your AI Financial Coach</div></div></div><div className="headerActions"><button className="themeToggle" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}><span aria-hidden="true">{theme === "dark" ? "☼" : "☾"}</span><span className="themeToggleLabel">{theme === "dark" ? "Light" : "Dark"}</span></button><div className="secureBadge"><span>●</span> Secure</div><div className="profileArea"><button className="profileButton" onClick={()=>setProfileMenu(v=>!v)} aria-expanded={profileMenu}><span className="profileAvatar">{(profile.name||"A").charAt(0).toUpperCase()}</span><span className="profileButtonText">{profile.name || "Profile"}</span><span className="profileChevron">{profileMenu?"⌃":"⌄"}</span></button>{profileMenu && <div className="profileMenu"><button className="profileMenuUser profileMenuUserButton" onClick={()=>{setProfileMenu(false);openModal("profile");}}><span className="profileMenuAvatar">{(profile.name||"A").charAt(0).toUpperCase()}</span><span><strong>{profile.name||"Your profile"}</strong><small>Personal account</small></span></button><div className="profileMenuDivider"/><button className="profileMenuItem" onClick={()=>{setProfileMenu(false);openModal("profile");}}>👤 <span>Profile settings</span></button><button className="profileMenuItem" onClick={()=>{setProfileMenu(false);openModal("security");}}>🔐 <span>Account & security</span></button><button className="profileMenuItem signOut" onClick={handleSignOut}>↪ <span>Sign out</span></button></div>}</div></div></div></header>
 
-      <section className="hero"><div><div className="eyebrow">YOUR MONEY, ONE PLACE</div><h1>Hi {profile.name || "there"} 👋<br/>Let&apos;s understand your money.</h1><p>Track cash flow, investments, loans, protection and goals. Artha keeps the calculations deterministic and uses AI to explain what the numbers mean.</p></div><div className="heroActions"><button className="primary" onClick={()=>openModal("transaction")}>＋ Add transaction</button><button className="secondary" onClick={()=>openModal("profile")}>Edit profile</button></div></section>
+      <section className="hero" id="overview"><div><div className="eyebrow">YOUR MONEY, ONE PLACE</div><h1>Hi {profile.name || "there"} 👋<br/>Let&apos;s understand your money.</h1><p>Track cash flow, investments, loans, protection and goals. Artha keeps the calculations deterministic and uses AI to explain what the numbers mean.</p></div><div className="heroActions"><button className="primary" onClick={()=>openModal("transaction")}>＋ Add transaction</button><button className="secondary" onClick={()=>openModal("profile")}>Edit profile</button></div></section>
+
+      <nav className="sectionNav" aria-label="Main sections">
+        <a href="#overview">Overview</a>
+        <a href="#planning">Planning</a>
+        <a href="#portfolio">Portfolio</a>
+        <a href="#ai-coach">AI Coach</a>
+        <Link href="/release-notes/">Release notes</Link>
+      </nav>
+
+      <section className="planningSection" id="planning">
+        <div className="planningHeading">
+          <div>
+            <div className="eyebrow">PLAN YOUR NEXT MOVE</div>
+            <h2>Make your next big decision with confidence.</h2>
+            <p>Choose a life goal and Artha will use your financial picture to help you explore the trade-offs.</p>
+          </div>
+          <span className="planningBadge">Portfolio-aware guidance</span>
+        </div>
+        <div className="planningGrid">
+          {[
+            ["⌂", "Home planning", "Explore a home budget, down payment, EMI and affordability.", "Help me plan a home purchase. Assess an appropriate property budget, down payment, loan amount, EMI, upfront costs and the impact on my cash flow, emergency fund and other goals. Ask me for any missing information."],
+            ["▣", "Car planning", "Compare purchase price, EMI and total ownership cost.", "Help me plan a car purchase. Evaluate on-road price, down payment, loan EMI, fuel, insurance, maintenance and total ownership cost. Check the impact on my savings, emergency fund and other goals. Ask for missing information."],
+            ["◎", "Goal planning", "Turn a target amount and timeline into a savings plan.", "Help me create a goal-based savings plan. Review my existing goals and portfolio, calculate the monthly contribution needed for a target and timeline, and explain assumptions and trade-offs. Ask me for missing information."],
+            ["⇄", "Debt planning", "Prioritise repayments and compare prepayment scenarios.", "Review my debts and help me build a repayment strategy. Compare avalanche and snowball approaches, EMI changes and prepayment scenarios using my actual loan data. Explain any assumptions and ask for missing information."],
+            ["◇", "Financial safety", "Review emergency savings, insurance and cash-flow resilience.", "Run a financial safety review using my Artha data. Assess emergency fund coverage, debt exposure, insurance information and cash-flow resilience. Identify missing information and prioritise practical next steps."],
+            ["↗", "Retirement planning", "Estimate your future needs and long-term savings gap.", "Help me plan for retirement. Estimate inflation-adjusted future expenses and the savings gap using my age, existing investments and goals where available. Clearly label assumptions and ask for missing information."]
+          ].map(([icon, title, description, prompt]) => (
+            <button className="planningCard" key={title} onClick={() => {
+              setQuestion(prompt);
+              setAnswer("");
+              setError("");
+              document.getElementById("ai-coach")?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }}>
+              <span className="planningIcon" aria-hidden="true">{icon}</span>
+              <strong>{title}</strong>
+              <span>{description}</span>
+              <em>Plan with Artha <b>→</b></em>
+            </button>
+          ))}
+        </div>
+        <p className="planningDisclaimer">Planning guidance is educational, depends on the information you provide, and is not a loan approval or guaranteed financial outcome.</p>
+      </section>
 
       {error && <div className="error pageError">{error}<button onClick={()=>setError("")}>×</button></div>}
       {toast && <div className="toast">✓ {toast}</div>}
 
-      <section className="stats"><Stat label="Monthly income" value={money(financials.monthlyIncome)} note={`${income.length} source${income.length===1?"":"s"}`} /><Stat label="Monthly outflow" value={money(financials.monthlyOutflow)} note="Living + EMI + investments" /><Stat label="Free cash flow" value={money(financials.freeCashFlow)} note={`${financials.savingsRate.toFixed(1)}% savings rate`} positive={financials.freeCashFlow>=0} /><Stat label="Tracked net worth" value={money(financials.trackedNetWorth)} note={`${money(financials.currentInvestmentValue)} investments · ${money(financials.outstandingDebt)} debt`} /></section>
+      <section className="stats" id="portfolio"><Stat label="Monthly income" value={money(financials.monthlyIncome)} note={`${income.length} source${income.length===1?"":"s"}`} /><Stat label="Monthly outflow" value={money(financials.monthlyOutflow)} note="Living + EMI + investments" /><Stat label="Free cash flow" value={money(financials.freeCashFlow)} note={`${financials.savingsRate.toFixed(1)}% savings rate`} positive={financials.freeCashFlow>=0} /><Stat label="Tracked net worth" value={money(financials.trackedNetWorth)} note={`${money(financials.currentInvestmentValue)} investments · ${money(financials.outstandingDebt)} debt`} /></section>
 
       <section className="insightGrid"><div className="card insightCard"><div className="cardHeader"><div><div className="eyebrow">FINANCIAL HEALTH</div><h2>What the engine sees</h2><p>Deterministic metrics from the information you entered.</p></div><span className="healthPill">{financials.health.cashFlow === "positive" ? "Cash flow positive" : "Cash flow needs attention"}</span></div><div className="healthGrid"><Metric label="Savings rate" value={`${financials.savingsRate.toFixed(1)}%`} /><Metric label="Debt service" value={`${financials.debtServiceRatio.toFixed(1)}%`} /><Metric label="Emergency cover" value={`${financials.emergencyCoverageMonths.toFixed(1)} mo`} /><Metric label="Investing rate" value={`${financials.investmentContributionRate.toFixed(1)}%`} /></div><div className="healthNotes"><div><b>Emergency target</b><span>{money(financials.emergencyFundTarget3Months)}–{money(financials.emergencyFundTarget6Months)}</span></div><div><b>Goal funding</b><span>{financials.health.goalFunding === "covered" ? "Current free cash flow covers required goal contributions." : "Required goal contributions need review against current free cash flow."}</span></div></div></div><div className="card snapshot"><div className="eyebrow">QUICK REVIEW</div><h2>12-month outlook</h2><div className="forecastSummary"><strong>{money(financials.freeCashFlow * 12)}</strong><span>annual free cash flow at today&apos;s run rate</span></div><div className="forecastBars" aria-label="Twelve month run-rate cash flow"><div className="forecastBarsInner">{financials.projectedCashFlow.map(item=><div className="forecastCol" key={item.month}><i style={{height:`${Math.max(8, Math.min(100, Math.abs(item.freeCashFlow)/(Math.max(1,Math.abs(financials.freeCashFlow))*1.15)*100))}%`}}/><span>{item.month.slice(5)}</span></div>)}</div></div><div className="snapshotRow"><span>Cash savings</span><b>{money(financials.cashSavings)}</b></div><div className="snapshotRow"><span>Life cover</span><b>{money(financials.lifeCover)}</b></div><div className="snapshotRow"><span>Health cover</span><b>{money(financials.healthCover)}</b></div><div className="snapshotRow"><span>Outstanding debt</span><b>{money(financials.outstandingDebt)}</b></div><small className="forecastNote">Run-rate only: assumes today&apos;s recurring income, expenses, debt payments and investment contributions stay constant.</small></div></section>
 
@@ -965,9 +1017,9 @@ export default function Home() {
 
       <section className="card transactionCard"><div className="blockhead"><div><div className="eyebrow">TRANSACTIONS</div><h2>Recent activity</h2><p>Optional detailed transactions for richer AI review and categorization.</p></div><button className="secondary" onClick={()=>openModal("transaction")}>Add transaction</button></div>{transactions.length ? <div className="transactionTable"><div className="txRow txHead"><span>Date</span><span>Description</span><span>Category</span><span>Amount</span><span/></div>{transactions.map(item=><div className="txRow" key={item.id}><span>{formatDate(item.transactionDate)}</span><span><b>{item.description}</b><small>{item.source}</small></span><span>{item.category || "Uncategorized"}</span><span className={/income|credit/i.test(item.transactionType)?"txPositive":""}>{/income|credit/i.test(item.transactionType)?"+":"-"}{money(item.amount)}</span><span className="rowactions"><button className="mini" onClick={()=>openModal("transaction",item)}>Edit</button><button className="del" onClick={()=>removeRow("transactions",item.id)}>Delete</button></span></div>)}</div> : <Empty text="No detailed transactions yet. Add a few to make Artha's reviews more useful." />}</section>
 
-      <section className="card coach"><div className="coachIntro"><div><div className="eyebrow">✦ ARTHA AI COACH</div><h2>Ask Artha anything about your money.</h2><p>AI receives your current database records plus deterministic engine facts. It does not decide the calculations itself.</p></div><div className="coachMark">✦</div></div><div className="prompts">{prompts.map(([icon,title,text])=><button className={`prompt ${question===text?"selected":""}`} key={title} onClick={()=>{setQuestion(text);setAnswer("");setError("")}}><em>{icon}</em><strong>{title}</strong><small>Use prompt →</small></button>)}</div><label className="label" htmlFor="coach-question">Or ask your own question</label><textarea id="coach-question" value={question} onChange={e=>setQuestion(e.target.value)} placeholder="Example: How should I balance my emergency fund and investing?" rows={5}/><small className="note">On localhost, Artha uses the local AI gateway at <code>http://localhost:8787/api/coach</code>. If it is unavailable, Artha automatically falls back to deterministic engine guidance.</small><div className="coachActions"><button className="primary" disabled={aiLoading} onClick={()=>askArtha()}>{aiLoading?"Artha is thinking…":"Ask Artha for guidance →"}</button><button className="secondary" disabled={aiLoading} onClick={()=>askArtha("Review my finances and tell me the main areas I should review next. Use only the facts in my Artha data.","review")}>Run financial review</button></div>{answer && <div className="output"><div className="outputTitle">Artha says</div><div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></div></div>}<small className="note">Educational guidance only. Artha is not a SEBI-registered investment adviser or IRDAI insurance intermediary. Always verify product-specific decisions and current rules independently.</small></section>
+      <section className="card coach" id="ai-coach"><div className="coachIntro"><div><div className="eyebrow">✦ ARTHA AI COACH</div><h2>Ask Artha anything about your money.</h2><p>For production AI guidance, Artha retrieves your records securely and sends calculated financial summaries to the configured AI provider. Your login credentials are never sent. The Financial Engine remains the source of truth.</p></div><div className="coachMark">✦</div></div><div className="prompts">{prompts.map(([icon,title,text])=><button className={`prompt ${question===text?"selected":""}`} key={title} onClick={()=>{setQuestion(text);setAnswer("");setError("")}}><em>{icon}</em><strong>{title}</strong><small>Use prompt →</small></button>)}</div><label className="label" htmlFor="coach-question">Or ask your own question</label><textarea id="coach-question" value={question} onChange={e=>setQuestion(e.target.value)} placeholder="Example: How should I balance my emergency fund and investing?" rows={5}/><small className="note">On localhost, Artha uses the local AI gateway at <code>http://localhost:8787/api/coach</code>. If it is unavailable, Artha automatically falls back to deterministic engine guidance.</small><div className="coachActions"><button className="primary" disabled={aiLoading} onClick={()=>askArtha()}>{aiLoading?"Artha is thinking…":"Ask Artha for guidance →"}</button><button className="secondary" disabled={aiLoading} onClick={()=>askArtha("Review my finances and tell me the main areas I should review next. Use only the facts in my Artha data.","review")}>Run financial review</button></div>{answer && <div className="output"><div className="outputTitle">Artha says</div><div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></div></div>}<small className="note">Educational guidance only. Artha is not a SEBI-registered investment adviser or IRDAI insurance intermediary. Always verify product-specific decisions and current rules independently.</small></section>
 
-      <footer className="footer"><div><strong>Artha</strong><span>Your AI Financial Coach</span></div><div>Built with <span aria-label="love">♥</span> by <b>Harish Sarma</b> · © 2026</div></footer>
+      <footer className="footer"><div><strong>Artha</strong><span>Your AI Financial Coach</span><Link href="/release-notes/">Release notes <span aria-hidden="true">↗</span></Link></div><div>Built with <span aria-label="love">♥</span> by <b>Harish Sarma</b> · © 2026</div></footer>
 
       {modal === "profile" && <Modal title="Profile settings" close={closeModal} save={saveModal} busy={saveBusy}><div className="formGrid two"><Field label="Your name"><input value={form.name||""} onChange={e=>setField("name",e.target.value)}/></Field><Field label="Age"><input type="number" min="18" max="100" value={form.age||""} onChange={e=>setField("age",e.target.value)}/></Field><Field label="Dependents"><input type="number" min="0" value={form.dependents||0} onChange={e=>setField("dependents",e.target.value)}/></Field><Field label="Country"><input value={form.country||"India"} onChange={e=>setField("country",e.target.value)}/></Field><Field label="Primary goal"><select value={form.primaryGoal||"Build wealth"} onChange={e=>setField("primaryGoal",e.target.value)}>{["Build emergency fund","Save for marriage","Invest more","Pay off debt","Major purchase","Build wealth","Other"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Risk profile"><select value={form.riskProfile||"Moderate"} onChange={e=>setField("riskProfile",e.target.value)}>{["Conservative","Moderate","Aggressive","Not assessed"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Investment horizon"><select value={form.investmentHorizon||"5+ years"} onChange={e=>setField("investmentHorizon",e.target.value)}>{["< 1 year","1–3 years","3–5 years","5+ years"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Liquid emergency savings"><input type="number" min="0" value={form.cashSavings||""} onChange={e=>setField("cashSavings",e.target.value)}/></Field><Field label="Life / term cover"><input type="number" min="0" value={form.lifeCover||""} onChange={e=>setField("lifeCover",e.target.value)}/></Field><Field label="Health cover"><input type="number" min="0" value={form.healthCover||""} onChange={e=>setField("healthCover",e.target.value)}/></Field></div></Modal>}
       {modal === "security" && <Modal title="Account & security" close={closeModal} save={updatePassword} busy={false}><div className="securityPanel"><div className="securityItem"><span>Signed-in email</span><b>{authEmail || "Authenticated account"}</b></div><div className="securityItem"><span>Data protection</span><b>Supabase Auth + Postgres RLS</b></div><div className="securityItem"><span>Change password</span><b>Updates your current account password</b></div><Field label="New password"><input type="password" minLength={8} value={securityPassword} onChange={e=>setSecurityPassword(e.target.value)} placeholder="At least 8 characters"/></Field><Field label="Confirm new password"><input type="password" minLength={8} value={securityConfirm} onChange={e=>setSecurityConfirm(e.target.value)} placeholder="Re-enter password"/></Field></div></Modal>}
