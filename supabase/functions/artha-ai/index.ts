@@ -1,29 +1,43 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { calculateFinancials } from "../_shared/financial-engine.ts";
 
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+const allowedOrigins = new Set(
+  (Deno.env.get("ALLOWED_ORIGINS") ||
+    "https://harishsarmav.github.io,http://localhost:3000,http://127.0.0.1:3000")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+);
+
+function corsHeaders(req: Request): Record<string, string> | null {
+  const origin = req.headers.get("Origin");
+  if (origin && !allowedOrigins.has(origin)) return null;
+  return {
+    ...(origin ? { "Access-Control-Allow-Origin": origin } : {}),
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Vary": "Origin",
+  };
+}
+
+const json = (req: Request, body: unknown, status = 200) => {
+  const headers = corsHeaders(req);
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...(headers ?? {}), "Content-Type": "application/json" },
+  });
 };
 
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
+class AuthError extends Error {
+  status = 401;
+  constructor(message: string) { super(message); this.name = "AuthError"; }
+}
 
 function publishableKey() {
-  const direct = Deno.env.get("SUPABASE_PUBLISHABLE_KEY");
-  if (direct) return direct;
-
   const raw = Deno.env.get("SUPABASE_PUBLISHABLE_KEYS");
   if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      if (typeof parsed?.default === "string") return parsed.default;
-    } catch {
-      // Fall through to the legacy anon key.
-    }
+    try { return JSON.parse(raw).default; } catch { /* legacy fallback */ }
   }
-
   return Deno.env.get("SUPABASE_ANON_KEY") || "";
 }
 
@@ -36,21 +50,17 @@ function normalizeRows(data: any[] | null) { return data ?? []; }
 
 async function getUserContext(req: Request) {
   const auth = req.headers.get("Authorization");
-  if (!auth?.startsWith("Bearer ")) throw new Error("Authentication required.");
+  if (!auth?.startsWith("Bearer ")) throw new AuthError("Authentication required.");
   const token = auth.replace(/^Bearer\s+/i, "");
-  const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const supabaseKey = publishableKey();
-  if (!supabaseUrl || !supabaseKey) throw new Error("Supabase server configuration is incomplete.");
-
-  const client = createClient(supabaseUrl, supabaseKey, {
+  const client = createClient(Deno.env.get("SUPABASE_URL")!, publishableKey(), {
     global: { headers: { Authorization: `Bearer ${token}` } },
     auth: { persistSession: false, autoRefreshToken: false },
   });
   const { data: userData, error: userError } = await client.auth.getUser(token);
-  if (userError || !userData.user) throw new Error("Your session is invalid or expired.");
+  if (userError || !userData.user) throw new AuthError("Your session is invalid or expired.");
   const userId = userData.user.id;
   const [profile, income, expenses, investments, loans, insurance, goals, transactions] = await Promise.all([
-    client.from("profiles").select("*").eq("user_id", userId).maybeSingle(),
+    client.from("profiles").select("*").eq("id", userId).maybeSingle(),
     client.from("income").select("*").eq("user_id", userId),
     client.from("expenses").select("*").eq("user_id", userId),
     client.from("investments").select("*").eq("user_id", userId),
@@ -64,7 +74,7 @@ async function getUserContext(req: Request) {
   const profileRow = profile.data ?? {};
   const input = {
     profile: {
-      name: profileRow.full_name ?? userData.user.user_metadata?.full_name ?? "",
+      name: profileRow.name ?? userData.user.user_metadata?.full_name ?? "",
       age: numberValue(profileRow.age), dependents: numberValue(profileRow.dependents), riskProfile: profileRow.risk_profile ?? "",
       investmentHorizon: profileRow.investment_horizon ?? "", primaryGoal: profileRow.primary_goal ?? "",
       lifeCover: numberValue(profileRow.life_cover), healthCover: numberValue(profileRow.health_cover), cashSavings: numberValue(profileRow.cash_savings),
@@ -72,8 +82,8 @@ async function getUserContext(req: Request) {
     income: normalizeRows(income.data).map((x:any)=>({amount:numberValue(x.amount),frequency:x.frequency})),
     expenses: normalizeRows(expenses.data).map((x:any)=>({amount:numberValue(x.amount),frequency:x.frequency,category:x.category||"Other"})),
     investments: normalizeRows(investments.data).map((x:any)=>({investedAmount:numberValue(x.invested_amount),currentValue:numberValue(x.current_value),monthlyAmount:numberValue(x.monthly_amount),category:x.category||"Other"})),
-    loans: normalizeRows(loans.data).map((x:any)=>({outstanding:numberValue(x.outstanding_amount),emi:numberValue(x.emi_amount),interestRate:numberValue(x.interest_rate),type:x.type||"Other"})),
-    insurance: normalizeRows(insurance.data).map((x:any)=>({type:x.type||"Other",coverage:numberValue(x.coverage_amount),premium:numberValue(x.premium_amount),frequency:x.premium_frequency||"Yearly"})),
+    loans: normalizeRows(loans.data).map((x:any)=>({outstanding:numberValue(x.outstanding),emi:numberValue(x.emi),interestRate:numberValue(x.interest_rate),type:x.type||"Other"})),
+    insurance: normalizeRows(insurance.data).map((x:any)=>({type:x.type||"Other",coverage:numberValue(x.coverage),premium:numberValue(x.premium),frequency:x.frequency||"Yearly"})),
     goals: normalizeRows(goals.data).map((x:any)=>({name:x.name,targetAmount:numberValue(x.target_amount),currentAmount:numberValue(x.current_amount),targetDate:x.target_date})),
   };
   return { client, userId, profileRow, transactions: normalizeRows(transactions.data), financials: calculateFinancials(input) };
@@ -120,19 +130,20 @@ class QuotaError extends Error {
   constructor(message: string) { super(message); this.name = "QuotaError"; }
 }
 
-async function consumeDailyQuota(client: any) {
+async function consumeDailyQuota(client: any, userId: string) {
   const limit = 30;
-  const { data, error } = await client.rpc("consume_ai_quota", { p_limit: limit });
-  if (error) throw error;
-
-  const row = Array.isArray(data) ? data[0] : data;
-  if (!row?.allowed) {
-    throw new QuotaError(
-      `Daily AI limit reached (${limit} requests). Your deterministic Artha engine is still available.`,
-    );
+  // The database performs an atomic upsert; concurrent requests cannot race past the limit.
+  const { data, error } = await client.rpc("consume_ai_quota", {
+    p_user_id: userId,
+  });
+  if (error) {
+    if (error.message?.includes("AI_DAILY_LIMIT_REACHED")) {
+      throw new QuotaError(`Daily AI limit reached (${limit} requests). Your deterministic Artha engine is still available.`);
+    }
+    throw error;
   }
-
-  return { limit, remaining: Number(row.remaining ?? 0) };
+  const used = Number(data);
+  return { limit, remaining: Math.max(0, limit - used) };
 }
 
 async function callProvider(system: string, user: string) {
@@ -140,105 +151,83 @@ async function callProvider(system: string, user: string) {
   const apiKey = Deno.env.get("AI_API_KEY") || "";
   const baseUrl = (Deno.env.get("AI_BASE_URL") || "https://api.openai.com/v1").replace(/\/$/, "");
   const model = Deno.env.get("AI_MODEL") || "gpt-4o-mini";
-
-  console.log("AI provider configuration:", {
-    provider,
-    baseUrl,
-    model,
-    hasApiKey: Boolean(apiKey),
+  if (!apiKey && provider !== "ollama") return null;
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+    body: JSON.stringify({ model, temperature: 0.2, messages: [{ role:"system", content:system }, { role:"user", content:user }] }),
   });
-
-  if (!apiKey && provider !== "ollama") {
-    console.error("AI provider skipped: API key is missing.");
-    return null;
-  }
-
-  try {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0.2,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-      }),
-    });
-
-    const responseText = await response.text();
-
-    console.log("AI provider response:", {
-      status: response.status,
-      statusText: response.statusText,
-      body: responseText.slice(0, 1000),
-    });
-
-    if (!response.ok) {
-      console.error("AI provider request failed.");
-      return null;
-    }
-
-    const data = JSON.parse(responseText);
-
-    return data?.choices?.[0]?.message?.content?.trim() || null;
-  } catch (error) {
-    console.error("AI provider exception:", String(error));
-    return null;
-  }
+  if (!response.ok) throw new Error(`AI provider returned HTTP ${response.status}.`);
+  const data = await response.json();
+  return data?.choices?.[0]?.message?.content?.trim() || null;
 }
 
 Deno.serve(async (req) => {
+  const cors = corsHeaders(req);
+  if (!cors) return new Response("Origin not allowed.", { status: 403 });
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
-  if (req.method !== "POST") return json({ error: "POST required." }, 405);
+  if (req.method !== "POST") return json(req, { error: "POST required." }, 405);
   try {
-    const body = await req.json().catch(() => ({}));
+    const contentType = req.headers.get("content-type") || "";
+    if (!contentType.toLowerCase().includes("application/json")) {
+      return json(req, { error: "Content-Type must be application/json." }, 415);
+    }
+    const rawBody = await req.text();
+    if (new TextEncoder().encode(rawBody).byteLength > 32_000) {
+      return json(req, { error: "Request body is too large." }, 413);
+    }
+    let body: any;
+    try {
+      body = rawBody ? JSON.parse(rawBody) : {};
+    } catch {
+      return json(req, { error: "Invalid request body." }, 400);
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return json(req, { error: "Invalid request body." }, 400);
+    }
     const mode = body.mode || "chat";
+    if (!["chat", "review", "scenario", "categorize"].includes(mode)) {
+      return json(req, { error: "Unsupported request mode." }, 400);
+    }
     const question = String(body.question || "").trim().slice(0, 6000);
-    if (!question) return json({ error: "A question is required." }, 400);
+    if (!question) return json(req, { error: "A question is required." }, 400);
     const ctx = await getUserContext(req);
     const f = ctx.financials;
 
     if (mode === "categorize") {
       const baseCategory = deterministicCategory(question, String(body.transactionType || "Expense"));
-      if (baseCategory !== "Other") return json({ category: baseCategory, confidence: 0.85, reason: "Matched a deterministic transaction rule." });
-      await consumeDailyQuota(ctx.client);
+      if (baseCategory !== "Other") return json(req, { category: baseCategory, confidence: 0.85, reason: "Matched a deterministic transaction rule." });
+      await consumeDailyQuota(ctx.client, ctx.userId);
       const system = "Classify the transaction into exactly one category: Housing, Food, Transport, Utilities, Healthcare, Shopping, Entertainment, Debt / EMI, Investments, Income, Other. Return only JSON: {\"category\":\"...\",\"confidence\":0.0,\"reason\":\"...\"}. Never invent merchant facts.";
-      const ai = await callProvider(system, `Transaction: ${question}\nAmount: ${numberValue(body.amount)}\nType: ${String(body.transactionType||"Expense")}`);
+      // The amount is not needed to categorize; send only the description and type.
+      const ai = await callProvider(system, `Transaction description: ${question}\nType: ${String(body.transactionType||"Expense")}`);
       if (ai) {
-        try {
-          const parsed = JSON.parse(ai.replace(/```json|```/g, "").trim());
-          const allowed = new Set([
-            "Housing", "Food", "Transport", "Utilities", "Healthcare",
-            "Shopping", "Entertainment", "Debt / EMI", "Investments", "Income", "Other",
-          ]);
-          const category = allowed.has(parsed.category) ? parsed.category : "Other";
-          const confidence = Math.min(1, Math.max(0, Number(parsed.confidence) || 0));
-          return json({
-            category,
-            confidence,
-            reason: typeof parsed.reason === "string" ? parsed.reason : "AI classification.",
-          });
-        } catch {
-          // Fall through to the deterministic low-confidence result.
-        }
+        try { const parsed = JSON.parse(ai.replace(/```json|```/g, "").trim()); return json(req, { category: parsed.category || "Other", confidence: Number(parsed.confidence)||0, reason: parsed.reason || "AI classification." }); } catch { /* fallback */ }
       }
-      return json({ category: "Other", confidence: 0.25, reason: "Not enough information for a reliable category." });
+      return json(req, { category: "Other", confidence: 0.25, reason: "Not enough information for a reliable category." });
     }
 
-    await consumeDailyQuota(ctx.client);
-    const facts = JSON.stringify(f, null, 2);
+    await consumeDailyQuota(ctx.client, ctx.userId);
+    // Minimize third-party disclosure: never send names of the user's goals.
+    const providerFacts = {
+      ...f,
+      goals: Array.isArray(f.goals)
+        ? f.goals.map((goal: any, index: number) => ({ ...goal, name: `Goal ${index + 1}` }))
+        : [],
+    };
+    const facts = JSON.stringify(providerFacts, null, 2);
     const system = `You are Artha, a careful Indian personal-finance coach. The Financial Engine is the source of truth. Use only the supplied calculated facts and user records. Do not silently recalculate, invent missing numbers, or claim access to bank/broker data. Explain assumptions clearly. For investment/insurance topics, provide educational decision factors rather than product recommendations. If facts are missing, say so. Keep answers practical and readable in markdown.\n\nCALCULATED FACTS:\n${facts}`;
     const userPrompt = mode === "review" ? "Review my financial picture and explain the main areas I should review next, using only these facts." : mode === "scenario" ? `${question}\nScenario facts: ${JSON.stringify(body.scenario || {})}` : question;
     const ai = await callProvider(system, userPrompt);
     const answer = ai || fallbackAnswer(question, f);
-    return json({ answer, facts: f, provider: ai ? (Deno.env.get("AI_PROVIDER") || "openai_compatible") : "deterministic" });
+    return json(req, { answer, provider: ai ? (Deno.env.get("AI_PROVIDER") || "openai_compatible") : "deterministic" });
   } catch (error) {
-    const status = error instanceof QuotaError ? error.status : 500;
-    return json({ error: error instanceof Error ? error.message : "Unable to process the request." }, status);
+    const status = error instanceof QuotaError || error instanceof AuthError ? error.status : 500;
+    const safeMessage = error instanceof QuotaError
+      ? error.message
+      : error instanceof AuthError
+        ? "Authentication required. Please sign in again."
+        : "Unable to process the request. Please try again.";
+    return json(req, { error: safeMessage }, status);
   }
 });

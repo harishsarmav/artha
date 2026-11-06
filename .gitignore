@@ -1,8 +1,12 @@
-node_modules
-.next
-out
+node_modules/
+.next/
+out/
 .env
-.env.local
+.env.*
+!.env.example
+!**/.env.example
+!.env.local.example
 supabase/functions/.env
+supabase/.temp/
 *.log
 .DS_Store

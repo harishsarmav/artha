@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 
@@ -43,13 +44,13 @@ export default function AuthPage() {
           email: email.trim(), password,
           options: { data: { full_name: fullName.trim() }, emailRedirectTo },
         });
-        if (error) return setError(error.message);
+        if (error) return setError("Unable to create your account. Please check your details and try again.");
         setMessage("Account created. Check your email to confirm your address, then sign in.");
         setPassword(""); setConfirmPassword("");
         return;
       }
       const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-      if (error) return setError(error.message);
+      if (error) return setError("Email or password is incorrect. Please try again.");
       router.replace("/"); router.refresh();
     } catch {
       setError("Something went wrong. Please try again.");
@@ -75,6 +76,7 @@ export default function AuthPage() {
           <div className="authFooter">{mode === "login" ? <>New to Artha? <button onClick={()=>switchMode("signup")} disabled={loading}>Create an account</button></> : <>Already have an account? <button onClick={()=>switchMode("login")} disabled={loading}>Sign in</button></>}</div>
         </div>
         <div className="authTrust">🔐 Your financial data is stored in your Supabase account and protected by row-level access policies.</div>
+        <div className="authReleaseLink"><Link href="/release-notes/">Read Artha release notes <span aria-hidden="true">↗</span></Link></div>
         <div className="authCopyright">Artha · Your AI Financial Coach · © 2026</div>
       </section>
     </main>

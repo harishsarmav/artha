@@ -21,11 +21,13 @@ Artha is a personal finance workspace built around one core rule: **the Financia
 ## Local setup
 
 1. Copy `.env.local.example` to `.env.local` and add the Supabase URL and publishable key.
-2. Run the SQL in `supabase/migrations/001_artha_v06.sql` in the Supabase SQL editor.
-3. Make sure Auth > URL Configuration includes your local URL (`http://localhost:3000`) and GitHub Pages URL (`https://harishsarmav.github.io/artha/`). For email confirmation, the GitHub Pages build uses `/artha/auth` as the callback path.
-4. Install dependencies with `npm install`. This v0.6 bundle intentionally does not include a stale lockfile; npm will generate a lockfile for your environment.
-5. Start the app with `npm run dev`.
-6. For local AI, start Ollama and run `npm run ai` in another terminal. The dashboard uses `http://localhost:8787/api/coach` automatically while running on localhost.
+2. Run `supabase/migrations/001_artha_v06.sql` in the Supabase SQL editor.
+3. Run `supabase/migrations/002_security_hardening.sql` to enable AI usage RLS and install the atomic server-enforced quota.
+4. Run `supabase/migrations/003_schema_alignment_and_rls.sql` to align legacy field names and rebuild owner-only policies. Back up first.
+5. Make sure Auth > URL Configuration includes your local URL (`http://localhost:3000`) and GitHub Pages URL (`https://harishsarmav.github.io/artha/`). For email confirmation, the GitHub Pages build uses `/artha/auth` as the callback path.
+6. Install dependencies with `npm install`, then run `npm audit`.
+7. Start the app with `npm run dev`.
+8. For local AI, start Ollama and run `npm run ai` in another terminal. The dashboard uses `http://localhost:8787/api/coach` automatically while running on localhost.
 
 ## Production AI gateway
 
@@ -37,6 +39,7 @@ Set production secrets in Supabase Edge Function secrets, for example:
 - `AI_BASE_URL=https://api.openai.com/v1`
 - `AI_MODEL=YOUR_MODEL`
 - `AI_API_KEY=YOUR_SERVER_SIDE_KEY`
+- `ALLOWED_ORIGINS=https://harishsarmav.github.io,http://localhost:3000,http://127.0.0.1:3000`
 
 Never put `AI_API_KEY` in `.env.local` variables prefixed with `NEXT_PUBLIC_`, and never ship it in the GitHub Pages bundle.
 
@@ -59,3 +62,17 @@ The publishable key is intended for browser use when Row Level Security is enabl
 ## Notes on the numbers
 
 The dashboard never adds loan EMI twice. Monthly outflow is living expenses + debt payments + investment contributions. The emergency-fund target uses essential recurring expenses plus debt payments. The 12-month outlook assumes today's recurring values stay constant; it does not forecast market returns or future salary changes.
+
+
+## Security and privacy
+
+- Public GitHub Pages configuration may contain only the Supabase project URL and publishable/anon key. Never expose a service-role key, database password, AI provider key, or private token in browser code or `NEXT_PUBLIC_*` variables.
+- Database tables use owner-scoped RLS. The `ai_usage` table is read-only to authenticated users; writes are permitted only through the authenticated quota RPC.
+- Production AI requests send the question and mode to the Edge Function. The Edge Function retrieves the signed-in user's own records under RLS; the browser does not send a second copy of the financial dataset.
+- AI guidance sends calculated financial summaries to the configured AI provider. Goal names are anonymized before provider submission; login credentials and raw database rows are not sent. Do not configure an AI provider unless you accept that processing. Use deterministic mode by leaving the provider API key unset.
+- The public Supabase test page and unused Next.js API route have been removed.
+
+
+## Supabase Free plan availability
+
+Supabase Free projects may pause after a period of inactivity. Artha does not run artificial keep-alive pings or background scripts. This is a Supabase plan limitation, not a frontend bug. For uninterrupted production availability, move the project to a paid Supabase plan; otherwise resume it from the Supabase dashboard when needed and keep independent backups.
