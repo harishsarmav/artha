@@ -8,6 +8,8 @@ import remarkGfm from "remark-gfm";
 import { supabase } from "./lib/supabase";
 import { calculateFinancials } from "./lib/financial-engine";
 import { prompts } from "./lib/prompts";
+import { TransactionCsvImport } from "./components/TransactionCsvImport";
+import type { ImportedTransaction } from "./lib/transaction-csv";
 
 type Profile = { id: string; name: string; age: number; dependents: number; country: string; riskProfile: string; investmentHorizon: string; primaryGoal: string; lifeCover: number; healthCover: number; cashSavings: number };
 type Income = { id: string; name: string; type: string; amount: number; frequency: string };
@@ -33,11 +35,14 @@ const loanTypes = ["Home Loan", "Car Loan", "Personal Loan", "Education Loan", "
 const insuranceTypes = ["Life / Term", "Health", "Personal Accident", "Other"];
 const goalTypes = ["Emergency fund", "Marriage", "Home", "Education", "Vehicle", "Retirement", "Travel", "Other"];
 const planningBackgrounds = ["home.webp", "car.webp", "goals.webp", "debt.webp", "safety.webp", "retirement.webp"];
+const LOCAL_AI_ENDPOINT = "http://localhost:8787/api/coach";
 function getAiTarget() {
+  const configuredEndpoint = process.env.NEXT_PUBLIC_AI_ENDPOINT?.trim();
+  if (configuredEndpoint) return configuredEndpoint;
   if (typeof window !== "undefined" && window.location.hostname === "localhost") {
-    return "http://localhost:8787/api/coach";
+    return LOCAL_AI_ENDPOINT;
   }
-  return process.env.NEXT_PUBLIC_AI_ENDPOINT || "";
+  return "";
 }
 
 function normalizeProfile(row: any, fallbackName = "") : Profile {
@@ -66,6 +71,26 @@ function recordSaveErrorMessage(error: unknown, record: string) {
 }
 function mapRows<T extends Record<string, any>>(rows: T[] | null) { return (rows ?? []).map((row) => ({ ...row })); }
 function todayLocalDate() { const date = new Date(); date.setMinutes(date.getMinutes() - date.getTimezoneOffset()); return date.toISOString().slice(0, 10); }
+
+function AiResponse({ answer, grounding }: { answer: string; grounding: string }) {
+  const [copyStatus, setCopyStatus] = useState("");
+  const copyResponse = async () => {
+    try {
+      await navigator.clipboard.writeText(answer);
+      setCopyStatus("Response copied.");
+    } catch {
+      setCopyStatus("Clipboard access is unavailable. Select the response text to copy it.");
+    }
+  };
+  return <div className="output">
+    <div className="outputHeader">
+      <div><div className="outputTitle">DhanView says</div><small className="outputGrounding">{grounding}</small></div>
+      <button className="mini" type="button" onClick={() => void copyResponse()}>Copy response</button>
+    </div>
+    <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></div>
+    <small className="copyStatus" role="status" aria-live="polite">{copyStatus}</small>
+  </div>;
+}
 
 export default function Home() {
   const router = useRouter();
@@ -110,6 +135,7 @@ export default function Home() {
   const [yearTransactionsReload, setYearTransactionsReload] = useState(0);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
+  const [answerGrounding, setAnswerGrounding] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [scenarioExtra, setScenarioExtra] = useState(0);
   const [categorizing, setCategorizing] = useState(false);
@@ -502,6 +528,26 @@ export default function Home() {
       lines.push(
         `Outstanding debt is **${Math.round(f.outstandingDebt).toLocaleString("en-IN")}** with monthly debt payments of **${Math.round(f.debtPayments).toLocaleString("en-IN")}** (${f.debtServiceRatio.toFixed(1)}% of monthly income).`
       );
+      const openLoans = loans.filter((loan) => loan.outstanding > 0);
+      if (!openLoans.length) {
+        lines.push("No outstanding loan records are available in the data currently loaded, so I cannot rank your debts or calculate an EMI or prepayment scenario.");
+      } else {
+        lines.push("Recorded loan details:");
+        openLoans.forEach((loan) => {
+          const loanLabel = loan.name || loan.type || "Loan";
+          const rate = loan.interestRate > 0 ? `${loan.interestRate}% annual rate` : "interest rate not recorded";
+          const emi = loan.emi > 0 ? `${money(loan.emi)} monthly EMI` : "EMI not recorded";
+          const term = loan.tenureMonths > 0 ? `${loan.tenureMonths} months remaining` : "remaining term not recorded";
+          lines.push(`- **${loanLabel}**: ${money(loan.outstanding)} outstanding · ${rate} · ${emi} · ${term}.`);
+        });
+        const avalanche = [...openLoans].filter((loan) => loan.interestRate > 0).sort((a, b) => b.interestRate - a.interestRate);
+        const missingRate = openLoans.some((loan) => loan.interestRate <= 0);
+        lines.push(avalanche.length ? `Avalanche order from recorded rates: ${avalanche.map((loan) => loan.name || loan.type || "Loan").join(" → ")}${missingRate ? "; loans without a recorded rate cannot be ranked" : ""}.` : "Avalanche order cannot be ranked because interest rates are not recorded.");
+        const snowball = [...openLoans].sort((a, b) => a.outstanding - b.outstanding);
+        lines.push(`Snowball order by recorded balance: ${snowball.map((loan) => loan.name || loan.type || "Loan").join(" → ")}.`);
+      }
+      lines.push("In general, avalanche directs extra payments to the highest-rate loan after paying each loan's minimum EMI; snowball directs them to the smallest balance. These are strategy descriptions, not a prepayment calculation.");
+      lines.push("To compare EMI or prepayment scenarios, provide the extra monthly amount or lump sum, any lender prepayment fees, and whether the lender would reduce the EMI or shorten the term.");
     }
     if (/goal|save more|saving/.test(q)) {
       if (f.goals.length) {
@@ -858,6 +904,77 @@ export default function Home() {
     }
   }
 
+  async function importCsvTransactions(rows: ImportedTransaction[]) {
+    if (!profile.id) throw new Error("Sign in again before importing transactions.");
+    if (!rows.length || rows.length > 3000) throw new Error("Import between 1 and 3,000 transaction rows at a time.");
+    const startDate = rows.reduce((value, row) => row.transactionDate < value ? row.transactionDate : value, rows[0].transactionDate);
+    const endDate = rows.reduce((value, row) => row.transactionDate > value ? row.transactionDate : value, rows[0].transactionDate);
+    const existingRows: any[] = [];
+    const pageSize = 1000;
+    for (let offset = 0; offset <= 5000; offset += pageSize) {
+      const { data, error: queryError } = await supabase
+        .from("transactions")
+        .select("transaction_date,description,amount,transaction_type")
+        .eq("user_id", profile.id)
+        .gte("transaction_date", startDate)
+        .lte("transaction_date", endDate)
+        .order("transaction_date", { ascending: true })
+        .range(offset, offset + pageSize - 1);
+      if (queryError) throw new Error("Could not check existing entries. Nothing was imported; try again.");
+      existingRows.push(...(data || []));
+      if ((data || []).length < pageSize) break;
+      if (offset >= 5000) throw new Error("There are too many saved entries in this date range to check safely. Import a smaller date range.");
+    }
+    const keyFor = (date: string, description: string, amount: number, type: string) => {
+      const normalizedType = /income|credit/i.test(type) ? "income" : "expense";
+      return `${date}|${description.trim().toLocaleLowerCase().replace(/\s+/g, " ")}|${Math.round(amount * 100)}|${normalizedType}`;
+    };
+    const occurrenceCounts = new Map<string, number>();
+    for (const row of existingRows) {
+      const key = keyFor(row.transaction_date, String(row.description || ""), numberValue(row.amount), String(row.transaction_type || ""));
+      occurrenceCounts.set(key, (occurrenceCounts.get(key) || 0) + 1);
+    }
+    const toSave: ImportedTransaction[] = [];
+    let duplicates = 0;
+    for (const row of rows) {
+      const key = keyFor(row.transactionDate, row.description, row.amount, row.transactionType);
+      const existingCount = occurrenceCounts.get(key) || 0;
+      const seenCount = occurrenceCounts.get(`imported:${key}`) || 0;
+      if (seenCount < existingCount) {
+        occurrenceCounts.set(`imported:${key}`, seenCount + 1);
+        duplicates++;
+      } else {
+        occurrenceCounts.set(`imported:${key}`, seenCount + 1);
+        toSave.push(row);
+      }
+    }
+    if (!toSave.length) return { inserted: 0, duplicates };
+    const payload = toSave.map((row) => ({
+      user_id: profile.id,
+      transaction_date: row.transactionDate,
+      description: row.description,
+      amount: row.amount,
+      transaction_type: row.transactionType,
+      category: row.category || "Other",
+      source: "Imported",
+    }));
+    const { data, error: insertError } = await supabase.from("transactions").insert(payload).select("id");
+    if (insertError) throw new Error("DhanView could not save the imported entries. Nothing from this import was added; please retry.");
+    if (!data || data.length !== payload.length) throw new Error("Supabase did not confirm every imported entry. Reload your transaction history before retrying.");
+    setYearTransactionsReload((value) => value + 1);
+    setTransactions((current) => [...payload.map((row, index) => ({
+      id: data[index].id,
+      transactionDate: row.transaction_date,
+      description: row.description,
+      amount: row.amount,
+      transactionType: row.transaction_type,
+      category: row.category,
+      source: row.source,
+    })), ...current].slice(0, 40));
+    showToast(`${data.length} imported transaction${data.length === 1 ? "" : "s"} saved.`);
+    return { inserted: data.length, duplicates };
+  }
+
   async function syncCoverageFromInsurance(currentEdit: any, savedItem: any) {
     const next = currentEdit ? insurance.map(v => v.id === currentEdit.id ? savedItem : v) : [savedItem, ...insurance];
     const life = next.filter((v:any)=>/life|term/i.test(v.type)).reduce((a:number,v:any)=>a+numberValue(v.coverage),0);
@@ -901,12 +1018,30 @@ export default function Home() {
     setAiLoading(true);
     setError("");
     setAnswer("");
+    setAnswerGrounding("");
 
     const target = getAiTarget();
     const isLocal = typeof window !== "undefined" && window.location.hostname === "localhost";
+    const usesLocalGateway = isLocal && target === LOCAL_AI_ENDPOINT;
+    const needsLoanDetails = /loan|debt|emi|avalanche|snowball|prepay/i.test(nextQuestion);
+    const localFinancialContext = usesLocalGateway ? {
+      financials: aiContext.financials,
+      ...(needsLoanDetails ? {
+        records: {
+          loans: loans.map((loan) => ({
+            type: loan.type,
+            outstanding: loan.outstanding,
+            interestRate: loan.interestRate,
+            emi: loan.emi,
+            tenureMonths: loan.tenureMonths,
+          })),
+        },
+      } : {}),
+    } : undefined;
 
     if (!target) {
       setAnswer(localFallbackAnswer(nextQuestion, mode));
+      setAnswerGrounding("Financial Engine facts only · AI gateway is not configured");
       showToast("AI gateway is not configured; showing engine-based guidance.");
       setAiLoading(false);
       return;
@@ -931,7 +1066,7 @@ export default function Home() {
           question: nextQuestion,
           mode,
           scenario: scenarioPayload,
-          ...(isLocal ? { financialContext: aiContext } : {}),
+          ...(usesLocalGateway ? { financialContext: localFinancialContext } : {}),
         }),
       });
 
@@ -949,10 +1084,30 @@ export default function Home() {
         );
       }
 
-      setAnswer(data.answer || localFallbackAnswer(nextQuestion, mode));
-    } catch (err) {
-      if (isLocal) {
+      if (data.grounding === "verified" && typeof data.answer === "string" && data.answer.trim()) {
+        setAnswer(data.answer);
+        setAnswerGrounding("AI answer passed source-reference and number checks");
+      } else {
         setAnswer(localFallbackAnswer(nextQuestion, mode));
+        const reason = data.fallbackReason;
+        const fallbackLabel = reason === "provider_not_configured"
+          ? "AI provider not configured · Financial Engine only"
+          : reason === "local_model_unavailable"
+            ? "Local AI model unavailable · Financial Engine only"
+            : reason === "answer_not_verified"
+              ? "AI answer failed fact checks · Financial Engine only"
+              : "AI answer was not verified · Financial Engine only";
+        setAnswerGrounding(fallbackLabel);
+        showToast(reason === "provider_not_configured"
+          ? "AI provider is not configured in Supabase Edge Function secrets; showing engine guidance."
+          : reason === "local_model_unavailable"
+            ? "Local AI model is unavailable; showing engine guidance."
+            : "AI answer could not be verified; showing engine guidance.");
+      }
+    } catch (err) {
+      if (usesLocalGateway) {
+        setAnswer(localFallbackAnswer(nextQuestion, mode));
+        setAnswerGrounding("Financial Engine facts only · local AI was unavailable");
         showToast("Local AI is unavailable; showing engine-based guidance.");
       } else {
         setError(
@@ -1164,7 +1319,7 @@ export default function Home() {
       <section className="card monthTracker" id="transactions" aria-labelledby="month-tracker-title">
         <div className="blockhead monthTrackerHead">
           <div><div className="eyebrow">MONTH BY MONTH</div><h2 id="month-tracker-title">Monthly entries</h2><p>Add each dated income or expense once, with its category and source. Review and manage your actual entries by month; recurring plan amounts stay separate.</p></div>
-          <button className="primary" type="button" onClick={()=>openModal("transaction")}>＋ Add entry</button>
+           <div className="monthEntryActions"><TransactionCsvImport onImport={importCsvTransactions}/><button className="primary" type="button" onClick={()=>openModal("transaction")}>＋ Add entry</button></div>
         </div>
         <div className="monthTrackerControls">
           <Field label="Year"><select value={spendingYear} onChange={e=>{setSpendingYear(Number(e.target.value));setSpendingMonth("all");}}>{Array.from({length:25},(_,index)=>new Date().getFullYear()-index).map(year=><option value={year} key={year}>{year}</option>)}</select></Field>
@@ -1194,14 +1349,14 @@ export default function Home() {
         </>}
       </section>
 
-      <section className="card coach" id="ai-coach"><div className="coachIntro"><div><div className="eyebrow">✦ DHANVIEW AI COACH</div><h2>Ask DhanView anything about your money.</h2><p>For production AI guidance, DhanView retrieves your records securely and sends calculated financial summaries to the configured AI provider. Your login credentials are never sent. The Financial Engine remains the source of truth.</p></div><div className="coachMark">✦</div></div><div className="coachDifference" aria-label="How DhanView is different"><article><strong>Your numbers lead</strong><span>A deterministic engine calculates your financial picture; AI explains the results.</span></article><article><strong>Plans connect</strong><span>Home, car, debt, safety, goals and retirement use one financial picture.</span></article><article><strong>Unknowns stay visible</strong><span>Missing inputs and assumptions are called out instead of filled in for you.</span></article></div><div className="prompts">{prompts.map(([icon,title,text])=><button className={`prompt ${question===text?"selected":""}`} key={title} onClick={()=>{setQuestion(text);setAnswer("");setError("")}}><em>{icon}</em><strong>{title}</strong><small>Use prompt →</small></button>)}</div><label className="label" htmlFor="coach-question">Or ask your own question</label><textarea id="coach-question" value={question} onChange={e=>setQuestion(e.target.value)} placeholder="Example: How should I balance my emergency fund and investing?" rows={5}/><small className="note">On localhost, DhanView uses the local AI gateway at <code>http://localhost:8787/api/coach</code>. If it is unavailable, DhanView automatically falls back to deterministic engine guidance.</small><div className="coachActions"><button className="primary" disabled={aiLoading} onClick={()=>askDhanView()}>{aiLoading?"DhanView is thinking…":"Ask DhanView for guidance →"}</button><button className="secondary" disabled={aiLoading} onClick={()=>askDhanView("Review my finances and tell me the main areas I should review next. Use only the facts in my DhanView data.","review")}>Run financial review</button></div>{answer && <div className="output"><div className="outputTitle">DhanView says</div><div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></div></div>}<small className="note">Educational guidance only. DhanView is not a SEBI-registered investment adviser or IRDAI insurance intermediary. Always verify product-specific decisions and current rules independently.</small></section>
+      <section className="card coach" id="ai-coach"><div className="coachIntro"><div><div className="eyebrow">✦ DHANVIEW AI COACH</div><h2>Ask DhanView anything about your money.</h2><p>DhanView uses your recorded data and calculated summaries to explain your finances. Debt questions include only loan type, balance, rate, EMI and remaining term; other questions use calculated summaries. Login credentials are never sent. The Financial Engine remains the source of truth; answers that fail fact checks fall back to engine guidance.</p></div><div className="coachMark">✦</div></div><div className="promptSuggestions"><span className="suggestionLabel">Try asking</span><div className="prompts">{prompts.map(([icon,title,text])=><button className={`prompt ${question===text?"selected":""}`} key={title} onClick={()=>{setQuestion(text);setAnswer("");setError("")}}><em aria-hidden="true">{icon}</em><strong>{title}</strong></button>)}</div></div><label className="label" htmlFor="coach-question">Or ask your own question</label><textarea id="coach-question" value={question} onChange={e=>setQuestion(e.target.value)} onKeyDown={event=>{if((event.ctrlKey||event.metaKey)&&event.key==="Enter"){event.preventDefault();if(!aiLoading) void askDhanView();}}} placeholder="Example: How should I balance my emergency fund and investing?" rows={5}/><small className="note">DhanView uses <code>NEXT_PUBLIC_AI_ENDPOINT</code> when configured, including on localhost. Otherwise it uses the local Ollama gateway at <code>http://localhost:8787/api/coach</code>. If a local model is unavailable or an AI answer fails checks, DhanView shows deterministic engine guidance.</small><small className="note">Press Ctrl+Enter (or Cmd+Enter) to send your question with your DhanView financial context.</small><div className="coachActions"><button className="primary" disabled={aiLoading} onClick={()=>askDhanView()}>{aiLoading?"DhanView is thinking…":"Ask DhanView for guidance →"}</button><button className="secondary" disabled={aiLoading} onClick={()=>askDhanView("Review my finances and tell me the main areas I should review next. Use only the facts in my DhanView data.","review")}>Run financial review</button></div>{answer && <AiResponse answer={answer} grounding={answerGrounding} />}<small className="note">Educational guidance only. DhanView is not a SEBI-registered investment adviser or IRDAI insurance intermediary. Always verify product-specific decisions and current rules independently.</small></section>
 
       <footer className="footer"><div><strong>DhanView</strong><span>Personal finance &amp; planning</span><Link href="/release-notes/">Release notes <span aria-hidden="true">↗</span></Link></div><div>Built with <span aria-label="love">♥</span> by <b>Harish Sarma</b> · © 2026</div></footer>
 
       {modal === "profile" && <Modal title="Profile settings" close={closeModal} save={saveModal} busy={saveBusy} error={error}><div className="formGrid two"><Field label="Your name"><input value={form.name||""} onChange={e=>setField("name",e.target.value)}/></Field><Field label="Age"><input type="number" min="18" max="100" value={form.age||""} onChange={e=>setField("age",e.target.value)}/></Field><Field label="Dependents"><input type="number" min="0" value={form.dependents||""} onChange={e=>setField("dependents",e.target.value)}/></Field><Field label="Country"><input value={form.country||""} onChange={e=>setField("country",e.target.value)} placeholder="Optional"/></Field><Field label="Primary goal"><select value={form.primaryGoal||""} onChange={e=>setField("primaryGoal",e.target.value)}><option value="">Not set</option>{["Build emergency fund","Save for marriage","Invest more","Pay off debt","Major purchase","Build wealth","Other"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Risk profile"><select value={form.riskProfile||""} onChange={e=>setField("riskProfile",e.target.value)}><option value="">Not assessed</option>{["Conservative","Moderate","Aggressive"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Investment horizon"><select value={form.investmentHorizon||""} onChange={e=>setField("investmentHorizon",e.target.value)}><option value="">Not set</option>{["< 1 year","1–3 years","3–5 years","5+ years"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Liquid emergency savings"><input type="number" min="0" value={form.cashSavings||""} onChange={e=>setField("cashSavings",e.target.value)}/></Field><Field label="Life / term cover"><input type="number" min="0" value={form.lifeCover||""} onChange={e=>setField("lifeCover",e.target.value)}/></Field><Field label="Health cover"><input type="number" min="0" value={form.healthCover||""} onChange={e=>setField("healthCover",e.target.value)}/></Field></div></Modal>}
       {modal === "security" && <Modal title="Account & security" close={closeModal} save={updatePassword} busy={false}><div className="securityPanel"><div className="securityItem"><span>Signed-in email</span><b>{authEmail || "Authenticated account"}</b></div><div className="securityItem"><span>Data protection</span><b>Supabase Auth + Postgres RLS</b></div><div className="securityItem"><span>Change password</span><b>Updates your current account password</b></div><Field label="New password"><input type="password" minLength={8} value={securityPassword} onChange={e=>setSecurityPassword(e.target.value)} placeholder="At least 8 characters"/></Field><Field label="Confirm new password"><input type="password" minLength={8} value={securityConfirm} onChange={e=>setSecurityConfirm(e.target.value)} placeholder="Re-enter password"/></Field></div></Modal>}
       {(modal === "income" || modal === "expense" || modal === "investment" || modal === "loan" || modal === "insurance" || modal === "goal" || modal === "transaction") && <DataModal type={modal} form={form} setField={setField} saveModal={saveModal} closeModal={closeModal} busy={saveBusy} error={error} autoCategorize={modal === "transaction" ? autoCategorize : undefined} categorizing={categorizing} />}
-      {modal === "scenario" && <Modal title="Scenario explanation" close={closeModal} wide><div className="scenarioExplain"><div className="scenarioCards"><Metric label="Extra saving" value={money(scenarioExtra)} /><Metric label="Next free cash flow" value={money(scenario.nextFreeCashFlow)} /><Metric label="After goal contributions" value={goals.length ? money(scenario.cashAfterGoals) : "—"} /><Metric label="Emergency cover after 12 mo" value={`${scenario.nextEmergencyMonths.toFixed(1)} months`} /></div><button className="primary" disabled={aiLoading} onClick={()=>askDhanView(`I am considering adding ${money(scenarioExtra)} of extra monthly savings. Explain what this changes in my current DhanView financial picture, including cash flow, emergency fund coverage and goal funding. Use the engine facts only.`,"scenario",{...scenario,extraMonthlySaving:scenarioExtra})}>{aiLoading?"DhanView is thinking…":"Ask DhanView to explain this scenario →"}</button>{answer && <div className="output"><div className="outputTitle">DhanView says</div><div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></div></div>}</div></Modal>}
+      {modal === "scenario" && <Modal title="Scenario explanation" close={closeModal} wide><div className="scenarioExplain"><div className="scenarioCards"><Metric label="Extra saving" value={money(scenarioExtra)} /><Metric label="Next free cash flow" value={money(scenario.nextFreeCashFlow)} /><Metric label="After goal contributions" value={goals.length ? money(scenario.cashAfterGoals) : "—"} /><Metric label="Emergency cover after 12 mo" value={`${scenario.nextEmergencyMonths.toFixed(1)} months`} /></div><button className="primary" disabled={aiLoading} onClick={()=>askDhanView(`I am considering adding ${money(scenarioExtra)} of extra monthly savings. Explain what this changes in my current DhanView financial picture, including cash flow, emergency fund coverage and goal funding. Use the engine facts only.`,"scenario",{...scenario,extraMonthlySaving:scenarioExtra})}>{aiLoading?"DhanView is thinking…":"Ask DhanView to explain this scenario →"}</button>{answer && <AiResponse answer={answer} grounding={answerGrounding} />}</div></Modal>}
     </main>
   );
 }

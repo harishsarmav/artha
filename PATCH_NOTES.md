@@ -1,4 +1,19 @@
-# Dhanive v0.7 release and security patch notes
+# DhanView v0.7 release and security patch notes
+
+## Unreleased — transaction CSV import
+- Added a browser-local CSV transaction importer to the monthly history view. CSV contents are not sent to an external parser or AI service.
+- Corrected the import form's JSX fragment nesting that prevented webpack from parsing `TransactionCsvImport.tsx`.
+- Added column mapping for dates, descriptions, amount/type, and separate debit/credit columns, plus a preview and explicit confirmation before saving.
+- Imported rows are stored in the signed-in user's transaction table with `source = Imported`; matching saved rows are skipped to reduce duplicate imports.
+- PDF parsing is deliberately not included in this release. Users can export a bank/card statement as CSV; PDF import requires a reviewed local parser and additional format validation.
+- Files are limited to 5 MB and 3,000 transaction rows per import. No migration is needed.
+
+## Unreleased — fact-grounded AI coach and demo playback
+- The local Ollama proxy and Supabase Edge Function now require structured responses that cite existing financial fact paths; unparseable citations or numbers outside supplied facts trigger the deterministic engine fallback.
+- The dashboard displays AI answers only when the gateway reports a successful grounding check. Older deployed gateways without that response marker fall back to deterministic guidance until redeployed.
+- Added Copy response and Ctrl+Enter / Cmd+Enter prompt submission.
+- Reworked the local demo renderer to capture continuous frames and prefer H.264 MP4 when the browser supports it, with WebM fallback. Re-render the video locally before playback; the earlier WebM contained only a few captured frames.
+- Fixed the renderer server's missing-file error path so it does not attempt to send a second set of HTTP headers.
 
 ## v0.7.2 — monthly spending and privacy controls
 - Added month/year filters, spending trends, recorded-month averages, and a clearly labeled annualized run-rate to the transaction tracker.
@@ -50,11 +65,12 @@
 2. If the original schema migration has not run, run `supabase/migrations/001_artha_v06.sql`.
 3. Run `supabase/migrations/002_security_hardening.sql`.
 4. Run `supabase/migrations/003_schema_alignment_and_rls.sql`.
-5. In Supabase Edge Function secrets, set `ALLOWED_ORIGINS` to:
+5. Run `supabase/migrations/004_ai_required_fields.sql` to add/backfill the canonical loan and insurance fields read by the AI function.
+6. In Supabase Edge Function secrets, set `ALLOWED_ORIGINS` to:
    `https://harishsarmav.github.io,http://localhost:3000,http://127.0.0.1:3000`
-6. Deploy the Edge Function: `supabase functions deploy artha-ai`.
-7. Install the committed lockfile with `npm ci`, then run `npm audit --audit-level=high` and `npm run build`.
-8. Commit the regenerated `package-lock.json` and source changes, then push to `main` to trigger GitHub Pages deployment.
+7. Deploy the Edge Function: `supabase functions deploy artha-ai`.
+8. Install the committed lockfile with `npm ci`, then run `npm audit --audit-level=high` and `npm run build`.
+9. Commit the regenerated `package-lock.json` and source changes, then push to `main` to trigger GitHub Pages deployment.
 
 ## Validation limits
 - `npm ci` completed, `npm audit --audit-level=high` found 0 vulnerabilities, and `npm run build` exported the static app with dummy public Supabase values.
@@ -86,4 +102,27 @@ The Supabase URL and publishable/anon key are public browser configuration. Neve
 ## Planning card artwork
 - Added six local WebP illustrations for home, car, goals, debt, financial safety, and retirement planning cards.
 - Applied responsive text-safe overlays with dark theme contrast; assets are served from the app and make no third-party image requests.
+
+
+## Theme and AI schema reliability
+- Kept System as the default theme and strengthened dark-mode readability for modal headers, error alerts, planning overlays, labels, and placeholders.
+- AI schema errors now include the safe database error code and point to the migration needed for current loan and insurance fields.
+- Added `004_ai_required_fields.sql`, an additive migration that backfills known legacy loan and insurance values without deleting records or changing access policies.
+
+
+## Debt guidance context
+- AI gateways now receive anonymized per-loan type, balance, interest rate, EMI, and remaining term only for debt-related questions; other prompts keep aggregate financial summaries.
+- When AI cannot pass grounding checks, deterministic debt guidance lists the saved loan records, ranks avalanche/snowball orders only where the entered data supports it, and asks for prepayment amount and lender terms before calculating scenarios.
+
+
+## AI gateway selection and fallback status
+- A configured `NEXT_PUBLIC_AI_ENDPOINT` now takes precedence on localhost, so local development can call the Supabase Edge Function without running `npm run ai`.
+- The local Ollama gateway remains available by setting `NEXT_PUBLIC_AI_ENDPOINT=http://localhost:8787/api/coach`; it is only needed while using that local gateway.
+- AI fallback responses now distinguish an unconfigured provider, unavailable local model, and answer rejected by fact checks.
+
+
+## AI Coach simplification
+- Removed the three repeated product-claims cards from the AI Coach; the section now explains its role briefly.
+- Replaced eight topic tiles that duplicated Planning with three compact suggestions for reviewing this month, spending patterns, and cash flow.
+- Documented the fact-check fallback, response copying, and Ctrl+Enter / Cmd+Enter shortcuts in the in-app release notes.
 

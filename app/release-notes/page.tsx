@@ -34,6 +34,46 @@ export default function ReleaseNotesPage() {
 
       <section className="releaseList" aria-label="DhanView product updates">
         <article className="releaseEntry releaseLatest">
+          <div className="releaseMeta"><time dateTime="2026-11-15">15 November 2026</time><span>AI setup</span></div>
+          <h2>Choose the AI gateway for local development</h2>
+          <p className="releaseSummary">A configured AI endpoint now works on localhost too. Use the Supabase Edge Function for cloud AI, or point the endpoint to the optional local Ollama gateway.</p>
+          <ul>
+            <li>Local AI status distinguishes a missing provider key, unavailable Ollama model, and an answer rejected by fact checks.</li>
+            <li>When AI is unavailable or unverified, DhanView labels its deterministic fallback.</li>
+          </ul>
+        </article>
+
+        <article className="releaseEntry releaseLatest">
+          <div className="releaseMeta"><time dateTime="2026-11-15">15 November 2026</time><span>Debt guidance</span></div>
+          <h2>Debt questions use recorded loan details</h2>
+          <p className="releaseSummary">Debt guidance can now compare recorded balances, rates, EMIs, and remaining terms. It identifies missing prepayment details rather than making up scenario results.</p>
+          <ul>
+            <li>Only anonymized loan type and repayment fields are included for debt-related AI questions.</li>
+            <li>If a response fails fact checks, engine guidance lists available loans and explains what is needed for a prepayment estimate.</li>
+          </ul>
+        </article>
+
+        <article className="releaseEntry releaseLatest">
+          <div className="releaseMeta"><time dateTime="2026-11-15">15 November 2026</time><span>AI Coach</span></div>
+          <h2>A cleaner AI Coach, separate from Planning</h2>
+          <p className="releaseSummary">Planning decisions stay in Planning. The AI Coach now offers three compact starting questions about this month, spending patterns, and cash flow.</p>
+          <ul>
+            <li>Answers that fail fact and number checks fall back to deterministic Financial Engine guidance.</li>
+            <li>Copy a response or press Ctrl+Enter / Cmd+Enter to ask with your financial context.</li>
+          </ul>
+        </article>
+
+        <article className="releaseEntry releaseLatest">
+          <div className="releaseMeta"><time dateTime="2026-11-15">15 November 2026</time><span>Accessibility and reliability</span></div>
+          <h2>System theme and clearer dark surfaces</h2>
+          <p className="releaseSummary">DhanView follows your device theme by default, with improved text and control contrast across dialogs, alerts, and planning cards.</p>
+          <ul>
+            <li>AI schema errors now show a database error code and the migration sequence needed to resolve missing fields.</li>
+            <li>A safe, additive Supabase migration backfills known legacy loan and insurance values.</li>
+          </ul>
+        </article>
+
+        <article className="releaseEntry releaseLatest">
           <div className="releaseMeta"><time dateTime="2026-11-15">15 November 2026</time><span>Planning visuals</span></div>
           <h2>Planning cards now have their own illustrations</h2>
           <p className="releaseSummary">Home, car, goals, debt, financial safety, and retirement cards use coordinated editorial artwork with text-safe fades.</p>

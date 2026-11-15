@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>DhanView demo video</title>
+  <style>
+    body{margin:0;background:#101211;color:#f5f7f6;font:16px/1.5 Segoe UI,Arial,sans-serif;display:grid;min-height:100vh;place-items:center;padding:24px;box-sizing:border-box}
+    main{width:min(1100px,100%)}h1{font-size:24px;margin:0 0 4px}p{color:#b3c2ba;margin:0 0 18px}video{width:100%;aspect-ratio:16/9;background:#000;border-radius:14px;display:block}small{display:block;color:#9ba8a1;margin-top:10px}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>DhanView product demo</h1>
+    <p>Captioned video · fictional sample data · MP4 preferred, WebM fallback</p>
+    <video controls playsinline preload="metadata">
+      <source src="output/DhanView-demo.mp4" type="video/mp4">
+      <source src="output/DhanView-demo.webm" type="video/webm">
+      Your browser could not play this video. Try a current version of Chrome or Edge.
+    </video>
+    <small>If the MP4 is not present yet, open marketing/demo-video/index.html through the local renderer and click “Render and save 1080p video.” It selects MP4 when supported and captures full-length frames. This local page loads no external services.</small>
+  </main>
+</body>
+</html>

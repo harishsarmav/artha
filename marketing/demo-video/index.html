@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DhanView demo video renderer</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#111a18;color:#20332f;font:16px/1.5 Segoe UI,Arial,sans-serif;display:grid;min-height:100vh;place-items:center;padding:24px}main{width:min(1100px,100%);background:#fffefa;border-radius:22px;overflow:hidden;box-shadow:0 24px 80px #0007}header{background:#123c3a;color:#fff;padding:22px 30px;display:flex;align-items:center;justify-content:space-between}header strong{font-size:26px;letter-spacing:-.04em}header small{color:#dcece5}.preview{padding:22px;background:#e9ede9}canvas{width:100%;height:auto;display:block;aspect-ratio:16/9;background:#f7f5ef;border-radius:12px;box-shadow:0 8px 24px #17211d24}.controls{padding:20px 30px 26px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}.primary{border:0;border-radius:10px;background:#1c6a5a;color:#fff;font-weight:700;padding:14px 19px;font-size:15px;cursor:pointer}.primary:disabled{opacity:.55;cursor:wait}.status{color:#65736e;flex:1;min-width:250px}.note{padding:0 30px 24px;color:#65736e;font-size:13px}
+</style>
+</head>
+<body>
+<main>
+<header><strong>DhanView</strong><small>Local demo video renderer</small></header>
+<div class="preview"><canvas id="video" width="1920" height="1080"></canvas></div>
+<div class="controls"><button class="primary" id="render">Render and save 1080p video</button><span class="status" id="status">Ready · 1080p landscape · fictional data · captions included</span></div>
+<p class="note">This captioned video is composed on this computer and saved only inside this project. It uses fictional numbers and sends no account data or content to external services. A narration script is included separately.</p>
+</main>
+<script>
+const canvas=document.getElementById('video'),ctx=canvas.getContext('2d'),button=document.getElementById('render'),status=document.getElementById('status');
+const C={paper:'#f7f5ef',white:'#fffefa',ink:'#20332f',muted:'#697773',teal:'#1c6a5a',deep:'#123c3a',pale:'#e1eee7',line:'#dbe5df',gold:'#d9a958'};
+const scenes=[
+ ['YOUR MONEY, CLEARER','A clearer view of your money.','One thoughtful workspace for everyday finances and future plans.','hero','Meet DhanView, a personal finance workspace to see your money clearly, plan ahead, and understand the numbers behind each decision.'],
+ ['THE WHOLE PICTURE','See the month at a glance.','Bring the information you choose to enter into one calm overview.','dashboard','Bring income, spending, savings, debt, investments, protection, and goals together in one calm overview. You choose what to enter.'],
+ ['SPENDING HISTORY','Find patterns over time.','Review transactions by month, year, and category.','history','Record transactions by date and category. Monthly and yearly views help you notice patterns and prepare for future costs.'],
+ ['GOALS THAT FEEL DOABLE','Turn a target into a plan.','See a monthly contribution based on your goal and timeline.','goal','Turn a target into a plan. DhanView calculates a monthly contribution from the goal, current amount, and timeline you provide.'],
+ ['PLAN BEFORE YOU CHANGE','Explore a what-if scenario.','Adjust an assumption and see how the plan responds.','scenario','Explore a what-if scenario before changing your plan. Results use the assumptions shown; they are not market forecasts.'],
+ ['CALCULATIONS, EXPLAINED','Understand the numbers.','The financial engine calculates. AI helps explain.','ai','The financial engine calculates your facts. AI helps explain them. Guidance is educational; verify product-specific decisions independently.'],
+ ['DHANVIEW','Plan with a clearer view.','Your records. Your goals. A more thoughtful next step.','close','DhanView. A clearer view of your money, and a more thoughtful way to plan what comes next. All figures in this demo are fictional.']
+];
+let current=0,parts=[];const W=1920,H=1080,SCENE_MS=7000;
+function box(x,y,w,h,r,fill,stroke){ctx.beginPath();ctx.roundRect(x,y,w,h,r);if(fill){ctx.fillStyle=fill;ctx.fill()}if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.stroke()}}
+function text(value,x,y,size,color=C.ink,weight=500){ctx.fillStyle=color;ctx.font=`${weight} ${size}px Segoe UI,Arial,sans-serif`;ctx.fillText(value,x,y)}
+function wrap(value,x,y,max,size,color,weight=500){ctx.font=`${weight} ${size}px Segoe UI,Arial,sans-serif`;ctx.fillStyle=color;let line='',yy=y;for(const word of value.split(' ')){let test=line?line+' '+word:word;if(ctx.measureText(test).width>max&&line){ctx.fillText(line,x,yy);line=word;yy+=size*1.42}else line=test}if(line)ctx.fillText(line,x,yy)}
+function shell(s){ctx.fillStyle=C.paper;ctx.fillRect(0,0,W,H);ctx.fillStyle=C.deep;ctx.fillRect(0,0,W,112);box(76,27,58,58,18,'#ffffff20','#ffffff50');text('✦',92,67,30,'#fff',700);text('DhanView',151,61,36,'#fff',700);text('PERSONAL FINANCE & PLANNING',154,86,13,'#dcece5',600);box(1578,34,270,42,21,'#ffffff18','#ffffff45');text('ILLUSTRATIVE DEMO DATA',1605,61,14,'#fff',700);text(s[0],112,190,17,C.teal,700);text(s[1],108,269,58,C.ink,700);text(s[2],112,318,23,C.muted,400)}
+function footer(s){box(112,920,1696,66,13,'#ffffffef',C.line);wrap(s[4],136,960,1640,18,C.ink,500);ctx.fillStyle=C.deep;ctx.fillRect(0,1012,W,68);text('DHANVIEW  ·  PERSONAL FINANCE, WITH A CLEARER VIEW',112,1054,16,'#dcece5',600);text('FICTIONAL SAMPLE DATA',1602,1054,14,'#dcece5',600)}
+function metric(x,label,value,note){box(x,383,525,152,20,C.white,C.line);text(label,x+26,425,16,C.muted,600);text(value,x+26,481,36,C.ink,700);text(note,x+26,510,14,C.muted,500)}
+function draw(s){shell(s);let kind=s[3];
+ if(kind==='hero'||kind==='close'){box(112,380,1696,480,28,C.deep);ctx.fillStyle=C.teal;ctx.beginPath();ctx.arc(1555,554,210,0,Math.PI*2);ctx.fill();ctx.globalAlpha=.42;ctx.beginPath();ctx.arc(1685,708,255,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;text(kind==='hero'?'YOUR MONEY, ONE PLACE':'PERSONAL FINANCE, WITH A CLEARER VIEW',164,476,16,'#dcece5',700);wrap(kind==='hero'?'Understand today. Plan for what comes next.':'Your records. Your goals. Your next step.',164,570,970,46,'#fff',700);wrap(kind==='hero'?'A calm overview, useful patterns, and planning guidance based on what you choose to enter.':'Make the numbers easier to understand, then choose your next step.',164,715,900,22,'#dcece5',500);box(1412,472,286,246,24,'#fffffff0');text('MONTHLY BUFFER',1444,523,15,C.muted,700);text('₹43,575',1444,582,36,C.deep,700);text('ILLUSTRATIVE',1444,616,13,C.muted,600);box(1444,653,216,16,8,C.pale);box(1444,653,126,16,8,C.teal)}
+ else if(kind==='dashboard'){metric(112,'MONTHLY INCOME','₹1,09,200','Fictional · user entered');metric(660,'MONTHLY EXPENSES','₹65,625','Fictional · user entered');metric(1208,'MONTHLY BUFFER','₹43,575','Income less expenses');box(112,570,1050,304,20,C.white,C.line);text('Cash flow at a glance',148,620,23,C.ink,700);text('INCOME',150,694,14,C.muted,700);box(150,716,730,28,14,C.pale);box(150,716,530,28,14,C.teal);text('EXPENSES',150,791,14,C.muted,700);box(150,813,730,28,14,'#f1e8dc');box(150,813,318,28,14,C.gold);box(1192,570,616,304,20,C.white,C.line);text('One connected picture',1228,620,23,C.ink,700);['Spending history','Portfolio','Financial goals','Planning'].forEach((v,i)=>{box(1228,656+i*48,544,37,10,i%2?C.paper:C.pale);text(v,1248,681+i*48,17,C.ink,600);text('›',1736,681+i*48,21,C.teal,700)})}
+ else if(kind==='history'){box(112,382,1074,494,20,C.white,C.line);text('Recorded expenses by month',148,433,22,C.ink,700);text('Fictional sample transaction history',148,461,14,C.muted,500);let vals=[68,52,77,60,49,71,57,43,63,50,66,46],labels=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'],base=800;ctx.strokeStyle=C.line;ctx.lineWidth=2;for(let k=0;k<4;k++){let y=530+k*82;ctx.beginPath();ctx.moveTo(172,y);ctx.lineTo(1130,y);ctx.stroke()}ctx.beginPath();vals.forEach((v,i)=>{let x=180+i*83,y=base-v*3;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)});ctx.strokeStyle=C.teal;ctx.lineWidth=7;ctx.stroke();vals.forEach((v,i)=>{let x=180+i*83,y=base-v*3;ctx.beginPath();ctx.arc(x,y,7,0,7);ctx.fillStyle=C.teal;ctx.fill();text(labels[i],x-16,837,13,C.muted,500)});box(1210,382,598,494,20,C.white,C.line);text('Spending categories',1248,433,22,C.ink,700);[['Housing','₹24,000',.37],['Food','₹12,400',.2],['Transport','₹8,100',.13],['Other','₹21,125',.3]].forEach((a,i)=>{let y=516+i*82;text(a[0],1248,y,17,C.ink,600);text(a[1],1628,y,17,C.ink,700);box(1248,y+16,480,12,6,C.pale);box(1248,y+16,480*a[2],12,6,[C.teal,C.gold,'#72a3b1','#91ab99'][i])})}
+ else if(kind==='goal'){box(112,390,1080,480,20,C.white,C.line);text('A goal you are working toward',150,445,23,C.ink,700);box(150,493,1004,144,18,C.paper,C.line);box(178,529,72,72,20,C.pale);text('⌂',197,580,36,C.teal,700);text('Home down payment',278,550,22,C.ink,700);text('Fictional goal · four-year timeline',278,584,16,C.muted,500);text('₹12,00,000',880,555,22,C.ink,700);text('target amount',880,584,14,C.muted,500);box(150,683,1004,22,11,C.pale);box(150,683,340,22,11,C.teal);text('₹4,10,000 saved',150,739,16,C.muted,600);text('34% of target',984,739,16,C.teal,700);box(1220,390,588,480,20,C.deep);text('A monthly guide',1260,448,20,'#dcece5',600);text('₹17,900',1260,533,51,'#fff',700);text('estimated monthly contribution',1260,570,16,'#dcece5',500);box(1260,625,474,2,2,'#ffffff42');wrap('Based on the target, current progress, and timeline entered.',1260,682,440,19,'#fff',500);text('An estimate, not a guarantee.',1260,814,14,'#dcece5',500)}
+ else if(kind==='scenario'){box(112,390,1058,480,20,C.white,C.line);text('What if you save a little more each month?',150,450,22,C.ink,700);text('EXTRA MONTHLY SAVING',150,534,14,C.muted,700);text('₹5,000',150,590,41,C.teal,700);box(150,634,850,15,8,C.pale);box(150,634,490,15,8,C.teal);ctx.beginPath();ctx.arc(640,641,16,0,7);ctx.fillStyle=C.white;ctx.fill();ctx.strokeStyle=C.teal;ctx.lineWidth=4;ctx.stroke();box(150,712,850,82,15,C.paper,C.line);text('Possible additional savings in 12 months',176,747,16,C.muted,500);text('₹60,000',176,779,22,C.ink,700);box(1210,390,598,480,20,C.pale,C.line);text('Compare the plan',1250,450,22,C.ink,700);[['Current plan','₹17,900 / mo'],['With scenario','₹22,900 / mo'],['Difference','+₹5,000 / mo']].forEach((a,i)=>{let y=530+i*88;text(a[0],1250,y,16,C.muted,500);text(a[1],1250,y+34,24,i===2?C.teal:C.ink,700)});text('Illustrative arithmetic',1250,812,14,C.muted,500)}
+ else if(kind==='ai'){box(112,390,1035,480,20,C.white,C.line);box(150,430,68,68,20,C.pale);text('✦',168,476,30,C.teal,700);text('DhanView guide',240,458,22,C.ink,700);text('Using facts from the fictional demo account',240,485,14,C.muted,500);box(150,534,920,244,18,C.paper,C.line);wrap('Monthly income is ₹1,09,200 and expenses are ₹65,625, leaving a monthly buffer of ₹43,575.',180,582,850,21,C.ink,500);wrap('You could compare this buffer with upcoming goals and essential costs before increasing a commitment.',180,687,850,18,C.muted,500);box(1190,390,618,480,20,C.deep);text('How DhanView works',1230,450,22,'#fff',700);[['01','Financial engine calculates'],['02','AI explains supplied facts'],['03','You choose your next step']].forEach((a,i)=>{let y=530+i*88;box(1230,y-26,50,50,14,'#ffffff20');text(a[0],1240,y+6,14,'#dcece5',700);text(a[1],1300,y+5,17,'#fff',600)});text('Educational guidance only',1230,812,14,'#dcece5',500)}
+ footer(s)}
+function drawCurrent(){draw(scenes[current])}
+async function render(){
+ button.disabled=true;status.textContent='Rendering the captioned demo locally… keep this tab open.';parts=[];
+ const formats=[{mime:'video/mp4;codecs="avc1.42E01E"',ext:'mp4'},{mime:'video/mp4',ext:'mp4'},{mime:'video/webm;codecs=vp8',ext:'webm'},{mime:'video/webm;codecs=vp9',ext:'webm'},{mime:'video/webm',ext:'webm'}];
+ const format=formats.find(item=>MediaRecorder.isTypeSupported(item.mime));
+ if(!format){status.textContent='This browser cannot record MP4 or WebM. Try an up-to-date version of Edge or Chrome.';button.disabled=false;return}
+ try{
+  const stream=canvas.captureStream(0),track=stream.getVideoTracks()[0];
+  if(typeof track.requestFrame!=='function')throw new Error('This browser cannot capture canvas frames. Open the renderer in current Edge or Chrome.');
+  const recorder=new MediaRecorder(stream,{mimeType:format.mime,videoBitsPerSecond:2500000});
+  recorder.ondataavailable=e=>{if(e.data.size)parts.push(e.data)};
+  const ended=new Promise(resolve=>recorder.onstop=resolve);recorder.start(1000);
+  for(current=0;current<scenes.length;current++){
+   drawCurrent();const stopAt=performance.now()+SCENE_MS;
+   while(performance.now()<stopAt){track.requestFrame();await new Promise(resolve=>setTimeout(resolve,1000/30))}
+  }
+  recorder.stop();await ended;stream.getTracks().forEach(item=>item.stop());
+  status.textContent='Saving the finished video in this project…';
+  const blob=new Blob(parts,{type:format.mime});
+  const response=await fetch(`/save-video?format=${format.ext}`,{method:'POST',headers:{'Content-Type':format.mime},body:blob});
+  if(!response.ok)throw new Error('Could not save the video.');
+  const result=await response.json();status.textContent=`Finished · ${(result.bytes/1048576).toFixed(1)} MB · marketing/demo-video/output/DhanView-demo.${format.ext}`;button.textContent='Render again';
+ }catch(error){status.textContent=`Could not render: ${error.message||'unknown error'}`}
+ finally{button.disabled=false}
+}
+button.addEventListener('click',render);drawCurrent();
+</script>
+</body></html>

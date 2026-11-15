@@ -72,7 +72,7 @@ async function getUserContext(authContext: { client: any; userId: string }) {
     client.from("income").select("amount,frequency").eq("user_id", userId),
     client.from("expenses").select("amount,frequency,category").eq("user_id", userId),
     client.from("investments").select("invested_amount,current_value,monthly_amount,category").eq("user_id", userId),
-    client.from("loans").select("outstanding,emi,interest_rate,type").eq("user_id", userId),
+    client.from("loans").select("outstanding,emi,interest_rate,type,tenure_months").eq("user_id", userId),
     client.from("insurance").select("type,coverage,premium,frequency").eq("user_id", userId),
     client.from("goals").select("target_amount,current_amount,target_date").eq("user_id", userId),
   ]);
@@ -93,7 +93,15 @@ async function getUserContext(authContext: { client: any; userId: string }) {
     insurance: normalizeRows(insurance.data).map((x:any)=>({type:x.type||"Other",coverage:numberValue(x.coverage),premium:numberValue(x.premium),frequency:x.frequency||"Yearly"})),
     goals: normalizeRows(goals.data).map((x:any,index:number)=>({name:`Goal ${index + 1}`,targetAmount:numberValue(x.target_amount),currentAmount:numberValue(x.current_amount),targetDate:x.target_date})),
   };
-  return { ...authContext, financials: calculateFinancials(input) };
+  const loanDetails = normalizeRows(loans.data).map((x: any, index: number) => ({
+    loan: `Loan ${index + 1}`,
+    type: x.type || "Other",
+    outstanding: numberValue(x.outstanding),
+    annualInterestRate: numberValue(x.interest_rate),
+    monthlyEmi: numberValue(x.emi),
+    remainingMonths: numberValue(x.tenure_months),
+  }));
+  return { ...authContext, financials: calculateFinancials(input), loanDetails };
 }
 
 function deterministicCategory(description: string, transactionType: string) {
@@ -112,7 +120,7 @@ function deterministicCategory(description: string, transactionType: string) {
   return "Other";
 }
 
-function fallbackAnswer(question: string, f: any) {
+function fallbackAnswer(question: string, f: any, loanDetails: any[] = []) {
   const q = question.toLowerCase();
   const lines: string[] = ["### DhanView's engine-based view", ""];
   if (f.monthlyIncome === 0) lines.push("You have not entered recurring income yet, so cash-flow conclusions are limited.");
@@ -122,7 +130,28 @@ function fallbackAnswer(question: string, f: any) {
   }
   if (/emergency|fund/.test(q)) lines.push(`Your current cash savings are **${Math.round(f.cashSavings).toLocaleString("en-IN")}**, against an engine target range of **${Math.round(f.emergencyFundTarget3Months).toLocaleString("en-IN")}–${Math.round(f.emergencyFundTarget6Months).toLocaleString("en-IN")}**.`);
   if (/invest/.test(q)) lines.push(`Your tracked investments are worth **${Math.round(f.currentInvestmentValue).toLocaleString("en-IN")}**, versus **${Math.round(f.investedAmount).toLocaleString("en-IN")}** invested.`);
-  if (/loan|debt|emi/.test(q)) lines.push(`Outstanding debt is **${Math.round(f.outstandingDebt).toLocaleString("en-IN")}** with monthly debt payments of **${Math.round(f.debtPayments).toLocaleString("en-IN")}**, a debt-service ratio of **${f.debtServiceRatio.toFixed(1)}%**.`);
+  if (/loan|debt|emi/.test(q)) {
+    lines.push(`Outstanding debt is **${Math.round(f.outstandingDebt).toLocaleString("en-IN")}** with monthly debt payments of **${Math.round(f.debtPayments).toLocaleString("en-IN")}**, a debt-service ratio of **${f.debtServiceRatio.toFixed(1)}%**.`);
+    const openLoans = loanDetails.filter((loan) => numberValue(loan.outstanding) > 0);
+    if (!openLoans.length) {
+      lines.push("No outstanding loan records are available in the data currently loaded, so I cannot rank your debts or calculate an EMI or prepayment scenario.");
+    } else {
+      lines.push("Recorded loan details:");
+      openLoans.forEach((loan) => {
+        const rate = numberValue(loan.annualInterestRate) > 0 ? `${numberValue(loan.annualInterestRate)}% annual rate` : "interest rate not recorded";
+        const emi = numberValue(loan.monthlyEmi) > 0 ? `${Math.round(numberValue(loan.monthlyEmi)).toLocaleString("en-IN")} monthly EMI` : "EMI not recorded";
+        const term = numberValue(loan.remainingMonths) > 0 ? `${numberValue(loan.remainingMonths)} months remaining` : "remaining term not recorded";
+        lines.push(`- **${loan.type || "Loan"}**: ${Math.round(numberValue(loan.outstanding)).toLocaleString("en-IN")} outstanding · ${rate} · ${emi} · ${term}.`);
+      });
+      const avalanche = [...openLoans].filter((loan) => numberValue(loan.annualInterestRate) > 0).sort((a, b) => numberValue(b.annualInterestRate) - numberValue(a.annualInterestRate));
+      const missingRate = openLoans.some((loan) => numberValue(loan.annualInterestRate) <= 0);
+      lines.push(avalanche.length ? `Avalanche order from recorded rates: ${avalanche.map((loan) => loan.type || "Loan").join(" → ")}${missingRate ? "; loans without a recorded rate cannot be ranked" : ""}.` : "Avalanche order cannot be ranked because interest rates are not recorded.");
+      const snowball = [...openLoans].sort((a, b) => numberValue(a.outstanding) - numberValue(b.outstanding));
+      lines.push(`Snowball order by recorded balance: ${snowball.map((loan) => loan.type || "Loan").join(" → ")}.`);
+    }
+    lines.push("In general, avalanche directs extra payments to the highest-rate loan after paying each loan's minimum EMI; snowball directs them to the smallest balance. These are strategy descriptions, not a prepayment calculation.");
+    lines.push("To compare EMI or prepayment scenarios, provide the extra monthly amount or lump sum, any lender prepayment fees, and whether the lender would reduce the EMI or shorten the term.");
+  }
   if (/goal/.test(q)) {
     if (!f.goals.length) lines.push("You have not added a financial goal yet.");
     else f.goals.slice(0,5).forEach((g:any)=>lines.push(`For **${g.name || "this goal"}**, the engine estimates **${Math.round(g.requiredMonthlyContribution).toLocaleString("en-IN")}/month** is required to cover the remaining amount by the target date.`));
@@ -130,6 +159,49 @@ function fallbackAnswer(question: string, f: any) {
   if (/insurance|cover/.test(q)) lines.push(`Tracked protection is **${Math.round(f.lifeCover).toLocaleString("en-IN")}** life/term cover and **${Math.round(f.healthCover).toLocaleString("en-IN")}** health cover.`);
   lines.push("", "I am using the calculated facts above rather than inventing missing numbers. Product-specific or market-sensitive decisions should be verified separately.");
   return lines.join("\n");
+}
+
+function flattenFactValues(value: unknown, prefix = "", output = new Map<string, unknown>()) {
+  if (!value || typeof value !== "object") return output;
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    output.set(path, child);
+    if (child && typeof child === "object") flattenFactValues(child, path, output);
+  }
+  return output;
+}
+
+function numericMentions(value: string) {
+  return (value.match(/-?\d[\d,]*(?:\.\d+)?/g) || []).map((token) => Number(token.replace(/,/g, ""))).filter(Number.isFinite);
+}
+
+function verifyProviderAnswer(raw: string, facts: unknown, question: string, scenario: unknown) {
+  try {
+    const parsed = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, "").trim());
+    const answer = typeof parsed.answer === "string" ? parsed.answer.trim() : "";
+    const used = Array.isArray(parsed.facts_used) ? parsed.facts_used : [];
+    if (!answer || answer.length > 6000 || used.some((key: unknown) => typeof key !== "string")) return null;
+
+    const allowedFacts = flattenFactValues(facts);
+    flattenFactValues(scenario, "scenario", allowedFacts);
+    const factKeys = new Set(allowedFacts.keys());
+    const validKeys = used.filter((key: string) => factKeys.has(key));
+    const missingOnly = /not recorded|not provided|not enough information|cannot determine|can't determine|don't have enough/i.test(answer);
+    if ((used.length === 0 && !missingOnly) || validKeys.length !== used.length) return null;
+
+    const allowedNumbers = new Set<number>();
+    for (const value of allowedFacts.values()) {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        allowedNumbers.add(value); allowedNumbers.add(Math.round(value)); allowedNumbers.add(Math.round(value * 10) / 10);
+      } else if (typeof value === "string") numericMentions(value).forEach((number) => allowedNumbers.add(number));
+    }
+    numericMentions(question).forEach((number) => allowedNumbers.add(number));
+    const unsupportedNumber = numericMentions(answer).some((number) => !allowedNumbers.has(number));
+    if (unsupportedNumber) return null;
+    return answer;
+  } catch {
+    return null;
+  }
 }
 
 class QuotaError extends Error {
@@ -209,7 +281,13 @@ Deno.serve(async (req) => {
       // The amount is not needed to categorize; send only the description and type.
       const ai = await callProvider(system, `Transaction description: ${question}\nType: ${String(body.transactionType||"Expense")}`);
       if (ai) {
-        try { const parsed = JSON.parse(ai.replace(/```json|```/g, "").trim()); return json(req, { category: parsed.category || "Other", confidence: Number(parsed.confidence)||0, reason: parsed.reason || "AI classification." }); } catch { /* fallback */ }
+        try {
+          const parsed = JSON.parse(ai.replace(/```json|```/g, "").trim());
+          const allowed = ["Housing", "Food", "Transport", "Utilities", "Healthcare", "Shopping", "Entertainment", "Debt / EMI", "Investments", "Income", "Other"];
+          const category = allowed.includes(parsed.category) ? parsed.category : "Other";
+          const confidence = Math.max(0, Math.min(1, Number(parsed.confidence) || 0));
+          return json(req, { category, confidence, reason: category === "Other" ? "Not enough information for a reliable category." : "Suggested from the transaction description; review before saving." });
+        } catch { /* deterministic fallback */ }
       }
       return json(req, { category: "Other", confidence: 0.25, reason: "Not enough information for a reliable category." });
     }
@@ -218,18 +296,26 @@ Deno.serve(async (req) => {
     const f = ctx.financials;
     await consumeDailyQuota(ctx.client, ctx.userId);
     // Minimize third-party disclosure: never send names of the user's goals.
+    const needsLoanDetails = /loan|debt|emi|avalanche|snowball|prepay/i.test(question);
     const providerFacts = {
       ...f,
+      ...(needsLoanDetails ? { loanDetails: ctx.loanDetails } : {}),
       goals: Array.isArray(f.goals)
         ? f.goals.map((goal: any, index: number) => ({ ...goal, name: `Goal ${index + 1}` }))
         : [],
     };
     const facts = JSON.stringify(providerFacts, null, 2);
-    const system = `You are DhanView, a careful Indian personal-finance coach. The Financial Engine is the source of truth. Use only the supplied calculated facts and user records. Do not silently recalculate, invent missing numbers, or claim access to bank/broker data. Explain assumptions clearly. For investment/insurance topics, provide educational decision factors rather than product recommendations. If facts are missing, say so. Keep answers practical and readable in markdown.\n\nCALCULATED FACTS:\n${facts}`;
-    const userPrompt = mode === "review" ? "Review my financial picture and explain the main areas I should review next, using only these facts." : mode === "scenario" ? `${question}\nScenario facts: ${JSON.stringify(body.scenario || {})}` : question;
+    const system = `You are DhanView, a careful Indian personal-finance explainer. The supplied Financial Engine output and recorded loan details are the only source of user-specific facts. Do not add outside facts, current market information, tax rules, rates, products, predictions, or guarantees. Do not invent or infer loan details. You may explain standard strategy concepts the user asks about, but label them as general and separate them from the user's recorded data. For debt questions, compare avalanche using recorded interest rates and snowball using recorded balances; identify missing fields instead of assuming them. If the records cannot answer the question, say what is missing and ask one short clarifying question. For investment and insurance topics, provide general educational considerations only. Keep the answer concise and use no numbered list.\n\nReturn ONLY valid JSON in this shape: {"answer":"...","facts_used":["exact.fact.path"]}. Each path must be copied from the supplied facts. For scenario facts, use paths prefixed with scenario. Use an empty facts_used array only when the answer clearly says the records do not contain enough information. Do not include a number in the answer unless that exact value appears in the question or supplied facts.\n\nCALCULATED FACTS AND MINIMIZED LOAN DETAILS:\n${facts}`;
+    const scenario = mode === "scenario" ? (body.scenario || {}) : {};
+    const userPrompt = mode === "review" ? "Review my financial picture and identify only what these facts support. Use the required JSON response." : mode === "scenario" ? `${question}\nScenario facts: ${JSON.stringify(scenario)}\nUse the required JSON response.` : `${question}\nUse the required JSON response.`;
     const ai = await callProvider(system, userPrompt);
-    const answer = ai || fallbackAnswer(question, f);
-    return json(req, { answer, provider: ai ? (Deno.env.get("AI_PROVIDER") || "openai_compatible") : "deterministic" });
+    const verifiedAnswer = ai ? verifyProviderAnswer(ai, providerFacts, question, scenario) : null;
+    const answer = verifiedAnswer || fallbackAnswer(question, f, ctx.loanDetails);
+    const provider = (Deno.env.get("AI_PROVIDER") || "openai_compatible").toLowerCase();
+    const fallbackReason = verifiedAnswer ? undefined
+      : !Deno.env.get("AI_API_KEY") && provider !== "ollama" ? "provider_not_configured"
+      : ai ? "answer_not_verified" : "provider_returned_empty";
+    return json(req, { answer, provider: verifiedAnswer ? provider : "deterministic", grounding: verifiedAnswer ? "verified" : "fallback", fallbackReason });
   } catch (error) {
     const databaseCode = error && typeof error === "object" && "code" in error
       ? String((error as { code?: unknown }).code || "")
@@ -266,7 +352,7 @@ Deno.serve(async (req) => {
     } else if (["PGRST204", "PGRST205", "42703", "42P01"].includes(safeDatabaseCode)) {
       status = 503;
       code = safeDatabaseCode;
-      safeMessage = "The AI data schema does not match this app version. Apply the current Supabase schema migrations, then retry.";
+      safeMessage = `The AI data schema does not match this app version (${safeDatabaseCode}). Apply any unapplied Supabase migrations, including 004_ai_required_fields.sql, refresh the schema cache, then redeploy artha-ai and retry.`;
     } else if (safeDatabaseCode === "42501") {
       status = 403;
       code = safeDatabaseCode;
