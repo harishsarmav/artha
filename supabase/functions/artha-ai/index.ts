@@ -33,6 +33,10 @@ class AuthError extends Error {
   constructor(message: string) { super(message); this.name = "AuthError"; }
 }
 
+class ProviderError extends Error {
+  constructor(readonly status: number) { super(`AI provider returned HTTP ${status}.`); this.name = "ProviderError"; }
+}
+
 function publishableKey() {
   const raw = Deno.env.get("SUPABASE_PUBLISHABLE_KEYS");
   if (raw) {
@@ -155,13 +159,18 @@ async function callProvider(system: string, user: string) {
   const baseUrl = (Deno.env.get("AI_BASE_URL") || "https://api.openai.com/v1").replace(/\/$/, "");
   const model = Deno.env.get("AI_MODEL") || "gpt-4o-mini";
   if (!apiKey && provider !== "ollama") return null;
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
-    signal: AbortSignal.timeout(20_000),
-    body: JSON.stringify({ model, temperature: 0.2, messages: [{ role:"system", content:system }, { role:"user", content:user }] }),
-  });
-  if (!response.ok) throw new Error(`AI provider returned HTTP ${response.status}.`);
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+      signal: AbortSignal.timeout(20_000),
+      body: JSON.stringify({ model, temperature: 0.2, messages: [{ role:"system", content:system }, { role:"user", content:user }] }),
+    });
+  } catch {
+    throw new ProviderError(0);
+  }
+  if (!response.ok) throw new ProviderError(response.status);
   const data = await response.json();
   return data?.choices?.[0]?.message?.content?.trim() || null;
 }
@@ -227,12 +236,53 @@ Deno.serve(async (req) => {
     const answer = ai || fallbackAnswer(question, f);
     return json(req, { answer, provider: ai ? (Deno.env.get("AI_PROVIDER") || "openai_compatible") : "deterministic" });
   } catch (error) {
-    const status = error instanceof QuotaError || error instanceof AuthError ? error.status : 500;
-    const safeMessage = error instanceof QuotaError
-      ? error.message
-      : error instanceof AuthError
-        ? "Authentication required. Please sign in again."
-        : "Unable to process the request. Please try again.";
-    return json(req, { error: safeMessage }, status);
+    const databaseCode = error && typeof error === "object" && "code" in error
+      ? String((error as { code?: unknown }).code || "")
+      : "";
+    const safeDatabaseCode = /^[A-Z0-9_]{3,32}$/.test(databaseCode) ? databaseCode : "";
+    let status = 500;
+    let code = "AI_INTERNAL";
+    let safeMessage = "Dhanive could not complete the AI request. Please check the Edge Function logs and try again.";
+
+    if (error instanceof QuotaError) {
+      status = error.status;
+      code = "AI_DAILY_LIMIT";
+      safeMessage = error.message;
+    } else if (error instanceof AuthError) {
+      status = error.status;
+      code = "AUTH_REQUIRED";
+      safeMessage = "Your session is missing or expired. Sign in again and retry.";
+    } else if (error instanceof ProviderError) {
+      status = error.status === 429 ? 503 : 502;
+      code = `AI_PROVIDER_${error.status}`;
+      if (error.status === 401 || error.status === 403) {
+        safeMessage = "The AI provider rejected its credentials. Check AI_API_KEY and AI_PROVIDER in Supabase Edge Function secrets.";
+      } else if (error.status === 429) {
+        safeMessage = "The AI provider is rate-limited or out of quota. Check its account limits and try again later.";
+      } else if (error.status === 400 || error.status === 404) {
+        safeMessage = "The AI provider rejected the model or endpoint. Check AI_BASE_URL and AI_MODEL in Supabase Edge Function secrets.";
+      } else {
+        safeMessage = "The AI provider is temporarily unavailable. Try again shortly.";
+      }
+    } else if (safeDatabaseCode === "PGRST202" || safeDatabaseCode === "42883") {
+      status = 503;
+      code = safeDatabaseCode;
+      safeMessage = "The AI quota function is missing from Supabase. Apply supabase/migrations/002_security_hardening.sql, then retry.";
+    } else if (["PGRST204", "PGRST205", "42703", "42P01"].includes(safeDatabaseCode)) {
+      status = 503;
+      code = safeDatabaseCode;
+      safeMessage = "The AI data schema does not match this app version. Apply the current Supabase schema migrations, then retry.";
+    } else if (safeDatabaseCode === "42501") {
+      status = 403;
+      code = safeDatabaseCode;
+      safeMessage = "Supabase denied access to the signed-in account data. Check the owner-only RLS policies and retry.";
+    } else if (safeDatabaseCode) {
+      code = safeDatabaseCode;
+      safeMessage = `The AI request failed in Supabase (code ${safeDatabaseCode}). Check the Edge Function logs for that database error.`;
+    }
+
+    // Log only a classified code, never the question, financial facts, tokens, or provider response body.
+    console.error("[artha-ai] request failed", { code, providerStatus: error instanceof ProviderError ? error.status : undefined });
+    return json(req, { error: safeMessage, code }, status);
   }
 });

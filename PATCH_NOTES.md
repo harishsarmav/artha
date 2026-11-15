@@ -87,3 +87,15 @@ The Supabase URL and publishable/anon key are public browser configuration. Neve
 - Added six local WebP illustrations for home, car, goals, debt, financial safety, and retirement planning cards.
 - Applied responsive text-safe overlays with dark theme contrast; assets are served from the app and make no third-party image requests.
 
+
+
+## Dhanive AI request diagnostics
+- Replaced the generic AI Edge Function failure with safe actionable messages for provider credentials, provider limits/endpoints, missing quota/schema migrations, authentication, and RLS errors.
+- Provider network/time-out failures are classified as temporary provider outages.
+- Edge logs contain only a safe error code and provider status; they never include user prompts, financial facts, credentials, or provider response bodies.
+- GitHub Pages deploy does not deploy Supabase Edge Functions; deploy the function source separately with the Supabase CLI.
+- Verified: `npm run build` succeeds. Live Edge Function behavior still requires deployment and a retry.
+
+## AI coach error visibility
+- Display AI request failures beside the Ask Dhanive controls, and inside the scenario dialog when the scenario explanation fails.
+- Clear the coach error when the user retries or edits their question.

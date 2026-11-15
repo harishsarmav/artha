@@ -294,3 +294,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 [data-theme="dark"] .planningArt{opacity:.48}
 [data-theme="dark"] .planningCard::before{background:linear-gradient(90deg,rgba(23,39,34,.98) 0%,rgba(23,39,34,.94) 38%,rgba(23,39,34,.78) 70%,rgba(23,39,34,.58) 100%)}
 @media(max-width:560px){.planningArt{opacity:.56;background-position:60% center}.planningCard::before{background:linear-gradient(90deg,rgba(255,255,255,.98) 0%,rgba(255,255,255,.87) 54%,rgba(255,255,255,.54) 100%)}[data-theme="dark"] .planningArt{opacity:.38}[data-theme="dark"] .planningCard::before{background:linear-gradient(90deg,rgba(23,39,34,.98) 0%,rgba(23,39,34,.9) 58%,rgba(23,39,34,.64) 100%)}}
+
+
+.coachError{margin:12px 0 0;line-height:1.5}
+[data-theme="dark"] .coachError{background:#351B1A;border-color:#703B37;color:#FFC4BE}
