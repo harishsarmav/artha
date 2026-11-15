@@ -22,7 +22,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}button:disabled{
 @media(max-width:560px){.shell{width:calc(100% - 18px)}.brand{font-size:25px}.tag{display:none}.hero{padding:24px 18px;border-radius:20px}.hero h1{font-size:36px;letter-spacing:-1.8px}.hero p{font-size:14px}.stats{gap:9px}.stat{padding:14px;border-radius:16px}.stat strong{font-size:20px}.stat small{font-size:11px}.block,.insightCard,.snapshot,.coach,.transactionCard{padding:18px;border-radius:18px}.blockhead{flex-direction:column}.row{align-items:flex-start}.rowright{flex-direction:column;align-items:flex-end}.prompts{grid-template-columns:1fr 1fr}.prompt{min-height:100px;padding:12px}.coach h2{font-size:24px}.coachActions .primary,.coachActions .secondary{width:100%}.footer{flex-direction:column;align-items:flex-start}.txRow{grid-template-columns:65px minmax(115px,1fr) 88px}.txRow>span:nth-child(4){display:none}.modalbody{padding:18px}.modalactions{position:sticky;bottom:0;background:#fff;padding-top:10px}.scenarioCards{grid-template-columns:1fr}.authCard{padding:22px}.authHeader h1{font-size:27px}}
 
 
-/* Dhanive trust-first design system */
+/* DhanView trust-first design system */
 .appHeader{background:linear-gradient(120deg,#123C3A,#1F6B5C);box-shadow:0 8px 28px #123C3A20}
 .brandSymbol{background:#ffffff18;border-color:#ffffff35}
 .hero{background:radial-gradient(circle at 82% 10%,#DCECE5 0,transparent 31%),linear-gradient(135deg,#fff,#F7F5EF);border-color:#DCE7E0}
@@ -139,7 +139,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}button:disabled{
 [data-theme="dark"] .progress,[data-theme="dark"] .barTrack{background:#2C443B}
 
 
-/* Accessible, theme-aware Dhanive interface */
+/* Accessible, theme-aware DhanView interface */
 :root{--ink:#263532;--muted:#5C6D66;--line:#D9E5DE;--page:#F7F5EF;--surface:#FFFFFF;--surface-soft:#FBFCFA;--accent:#1F6B5C;--accent-strong:#123C3A;--accent-wash:#DCECE5;color-scheme:light}
 html{scroll-padding-top:90px}
 body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:-.01em}
@@ -285,6 +285,37 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 
 .scenarioNote{display:block;margin:0 0 12px;color:var(--muted);font-size:11px;line-height:1.5}
 
+/* Final theme tokens: system mode uses a true black canvas with clear surface levels. */
+[data-theme="dark"]{color-scheme:dark;--ink:#F5F7F6;--muted:#AEB8B3;--line:#292D2B;--page:#000000;--surface:#0B0D0C;--surface-soft:#121514;--soft:#080A09;--accent:#83D9AD;--accent-strong:#B7EBCB;--accent-wash:#173126}
+[data-theme="dark"] body,[data-theme="dark"] .authPage,[data-theme="dark"] .releasePage{background:#000;color:#F5F7F6}
+[data-theme="dark"] .appHeader{background:#070908}
+[data-theme="dark"] .hero,[data-theme="dark"] .planningSection,[data-theme="dark"] .snapshot,[data-theme="dark"] .coach,[data-theme="dark"] .releaseLatest{background:#0B0D0C;border-color:#292D2B}
+[data-theme="dark"] .stat,[data-theme="dark"] .card,[data-theme="dark"] .profileMenu,[data-theme="dark"] .sectionNav,[data-theme="dark"] .planningCard,[data-theme="dark"] .authCard,[data-theme="dark"] .modal,[data-theme="dark"] .releaseEntry{background:#0B0D0C;border-color:#292D2B;color:#F5F7F6}
+[data-theme="dark"] .metric,[data-theme="dark"] .healthNotes>div,[data-theme="dark"] .strip,[data-theme="dark"] .empty,[data-theme="dark"] .securityItem,[data-theme="dark"] .runRateReview,[data-theme="dark"] .output{background:#121514;border-color:#292D2B}
+[data-theme="dark"] .healthPill,[data-theme="dark"] .planningBadge,[data-theme="dark"] .planningIcon{background:#173126;color:#B7EBCB}
+[data-theme="dark"] .row,[data-theme="dark"] .txRow,[data-theme="dark"] .transactionTable,[data-theme="dark"] .snapshotRow,[data-theme="dark"] .releaseHeader,[data-theme="dark"] .releaseFooter{border-color:#292D2B}
+[data-theme="dark"] .profileMenuDivider{background:#292D2B}
+[data-theme="dark"] .profileMenuItem,[data-theme="dark"] .profileMenuUser,[data-theme="dark"] .sectionNav a,[data-theme="dark"] .planningCard,[data-theme="dark"] .snapshotRow b{color:#F5F7F6}
+[data-theme="dark"] .profileMenuItem:hover,[data-theme="dark"] .sectionNav a:hover,[data-theme="dark"] .sectionNav a:focus-visible{background:#173126;color:#D9F2E3}
+[data-theme="dark"] .sectionNav a,[data-theme="dark"] .planningCard>span:not(.planningIcon),[data-theme="dark"] .hero p,[data-theme="dark"] .planningHeading p,[data-theme="dark"] .cardHeader p,[data-theme="dark"] .block p,[data-theme="dark"] .coach p,[data-theme="dark"] .releaseSummary,[data-theme="dark"] .releasePrivacy{color:#AEB8B3}
+[data-theme="dark"] .planningCard em,[data-theme="dark"] .releaseBrand span,[data-theme="dark"] .releaseMeta span:last-child{color:#A8E6C2}
+[data-theme="dark"] .authPage{background:#000}
+[data-theme="dark"] .authField input,[data-theme="dark"] .authCard input,[data-theme="dark"] .field input,[data-theme="dark"] .field select,[data-theme="dark"] .inlineInput input,[data-theme="dark"] .modal input,[data-theme="dark"] .modal select,[data-theme="dark"] .modal textarea,[data-theme="dark"] .coach textarea{background:#050606;color:#F5F7F6;border-color:#353B37}
+[data-theme="dark"] .primary{background:linear-gradient(135deg,#176B53,#105340);color:#fff;border-color:#176B53}
+[data-theme="dark"] .secondary,[data-theme="dark"] .mini{background:#101312;color:#A8E6C2;border-color:#353B37}
+[data-theme="dark"] .del{background:#281514;color:#FF9E96;border-color:#4B2522}
+[data-theme="dark"] .progress,[data-theme="dark"] .barTrack{background:#292D2B}
+[data-theme="dark"] .portfolioTabs button.active{background:#173126;color:#C5EED5;border-color:#315743}
+[data-theme="dark"] .portfolioTabs button span{background:#171A18;color:#D6DEDA}
+[data-theme="dark"] .markdown{color:#E4EAE7}
+[data-theme="dark"] .markdown th{background:#173126}
+[data-theme="dark"] .markdown td,[data-theme="dark"] .markdown th{border-color:#353B37}
+[data-theme="dark"] .outputTitle{color:#A8E6C2}
+[data-theme="dark"] .releaseBrand,[data-theme="dark"] .releaseBack,[data-theme="dark"] .releaseFooter a,[data-theme="dark"] .authReleaseLink a,[data-theme="dark"] .footer>div:first-child>a{color:#A8E6C2}
+[data-theme="dark"] .planningCard::before{background:linear-gradient(90deg,rgba(11,13,12,.99) 0%,rgba(11,13,12,.94) 38%,rgba(11,13,12,.82) 70%,rgba(11,13,12,.64) 100%)}
+[data-theme="dark"] .planningArt{opacity:.32}
+@media(max-width:560px){[data-theme="dark"] .planningCard::before{background:linear-gradient(90deg,rgba(11,13,12,.99) 0%,rgba(11,13,12,.93) 58%,rgba(11,13,12,.72) 100%)}[data-theme="dark"] .planningArt{opacity:.25}}
+
 
 .planningCard{position:relative;isolation:isolate;overflow:hidden;background-color:var(--surface)}
 .planningArt{position:absolute;inset:0;z-index:0;background-size:cover;background-position:center right;opacity:.78;pointer-events:none;transition:transform .3s ease}
@@ -294,7 +325,3 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 [data-theme="dark"] .planningArt{opacity:.48}
 [data-theme="dark"] .planningCard::before{background:linear-gradient(90deg,rgba(23,39,34,.98) 0%,rgba(23,39,34,.94) 38%,rgba(23,39,34,.78) 70%,rgba(23,39,34,.58) 100%)}
 @media(max-width:560px){.planningArt{opacity:.56;background-position:60% center}.planningCard::before{background:linear-gradient(90deg,rgba(255,255,255,.98) 0%,rgba(255,255,255,.87) 54%,rgba(255,255,255,.54) 100%)}[data-theme="dark"] .planningArt{opacity:.38}[data-theme="dark"] .planningCard::before{background:linear-gradient(90deg,rgba(23,39,34,.98) 0%,rgba(23,39,34,.9) 58%,rgba(23,39,34,.64) 100%)}}
-
-
-.coachError{margin:12px 0 0;line-height:1.5}
-[data-theme="dark"] .coachError{background:#351B1A;border-color:#703B37;color:#FFC4BE}

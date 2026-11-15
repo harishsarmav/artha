@@ -1,6 +1,6 @@
-# Dhanive v0.7
+# DhanView v0.7
 
-Dhanive is a personal finance workspace built around one core rule: **the Financial Engine calculates facts; AI explains them.**
+DhanView is a personal finance workspace built around one core rule: **the Financial Engine calculates facts; AI explains them.**
 
 ## Included in v0.7
 
@@ -81,4 +81,4 @@ The dashboard never adds loan EMI twice. Monthly outflow is living expenses + de
 
 ## Supabase Free plan availability
 
-Supabase Free projects may pause after a period of inactivity. Dhanive does not run artificial keep-alive pings or background scripts. This is a Supabase plan limitation, not a frontend bug. For uninterrupted production availability, move the project to a paid Supabase plan; otherwise resume it from the Supabase dashboard when needed and keep independent backups.
+Supabase Free projects may pause after a period of inactivity. DhanView does not run artificial keep-alive pings or background scripts. This is a Supabase plan limitation, not a frontend bug. For uninterrupted production availability, move the project to a paid Supabase plan; otherwise resume it from the Supabase dashboard when needed and keep independent backups.

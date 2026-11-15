@@ -1,4 +1,4 @@
-name: Deploy Dhanive to GitHub Pages
+name: Deploy DhanView to GitHub Pages
 
 on:
   push:

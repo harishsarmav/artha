@@ -94,7 +94,7 @@ function buildFallbackAnswer(question, financialContext) {
   const emergency6 = normalizeNumber(f.emergencyFundTarget6Months);
 
   const lines = [
-    "### Dhanive's engine-based view",
+    "### DhanView's engine-based view",
     "",
   ];
 
@@ -152,7 +152,7 @@ function buildFallbackAnswer(question, financialContext) {
 
   lines.push(
     "",
-    "This fallback uses Dhanive's deterministic engine facts only; no AI inference was used."
+    "This fallback uses DhanView's deterministic engine facts only; no AI inference was used."
   );
 
   return lines.join("\n");
@@ -275,7 +275,7 @@ const server = http.createServer(async (req, res) => {
       );
 
       const system = `
-You are Dhanive, a careful Indian personal-finance coach.
+You are DhanView, a careful Indian personal-finance coach.
 
 The Financial Engine is the source of truth.
 

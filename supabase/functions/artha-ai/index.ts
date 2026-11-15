@@ -114,7 +114,7 @@ function deterministicCategory(description: string, transactionType: string) {
 
 function fallbackAnswer(question: string, f: any) {
   const q = question.toLowerCase();
-  const lines: string[] = ["### Dhanive's engine-based view", ""];
+  const lines: string[] = ["### DhanView's engine-based view", ""];
   if (f.monthlyIncome === 0) lines.push("You have not entered recurring income yet, so cash-flow conclusions are limited.");
   else {
     lines.push(`Your normalized monthly income is **${Math.round(f.monthlyIncome).toLocaleString("en-IN")}** and monthly outflow is **${Math.round(f.monthlyOutflow).toLocaleString("en-IN")}**.`);
@@ -145,7 +145,7 @@ async function consumeDailyQuota(client: any, userId: string) {
   });
   if (error) {
     if (error.message?.includes("AI_DAILY_LIMIT_REACHED")) {
-      throw new QuotaError(`Daily AI limit reached (${limit} requests). Your deterministic Dhanive engine is still available.`);
+      throw new QuotaError(`Daily AI limit reached (${limit} requests). Your deterministic DhanView engine is still available.`);
     }
     throw error;
   }
@@ -159,17 +159,12 @@ async function callProvider(system: string, user: string) {
   const baseUrl = (Deno.env.get("AI_BASE_URL") || "https://api.openai.com/v1").replace(/\/$/, "");
   const model = Deno.env.get("AI_MODEL") || "gpt-4o-mini";
   if (!apiKey && provider !== "ollama") return null;
-  let response: Response;
-  try {
-    response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
-      signal: AbortSignal.timeout(20_000),
-      body: JSON.stringify({ model, temperature: 0.2, messages: [{ role:"system", content:system }, { role:"user", content:user }] }),
-    });
-  } catch {
-    throw new ProviderError(0);
-  }
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+    signal: AbortSignal.timeout(20_000),
+    body: JSON.stringify({ model, temperature: 0.2, messages: [{ role:"system", content:system }, { role:"user", content:user }] }),
+  });
   if (!response.ok) throw new ProviderError(response.status);
   const data = await response.json();
   return data?.choices?.[0]?.message?.content?.trim() || null;
@@ -230,7 +225,7 @@ Deno.serve(async (req) => {
         : [],
     };
     const facts = JSON.stringify(providerFacts, null, 2);
-    const system = `You are Dhanive, a careful Indian personal-finance coach. The Financial Engine is the source of truth. Use only the supplied calculated facts and user records. Do not silently recalculate, invent missing numbers, or claim access to bank/broker data. Explain assumptions clearly. For investment/insurance topics, provide educational decision factors rather than product recommendations. If facts are missing, say so. Keep answers practical and readable in markdown.\n\nCALCULATED FACTS:\n${facts}`;
+    const system = `You are DhanView, a careful Indian personal-finance coach. The Financial Engine is the source of truth. Use only the supplied calculated facts and user records. Do not silently recalculate, invent missing numbers, or claim access to bank/broker data. Explain assumptions clearly. For investment/insurance topics, provide educational decision factors rather than product recommendations. If facts are missing, say so. Keep answers practical and readable in markdown.\n\nCALCULATED FACTS:\n${facts}`;
     const userPrompt = mode === "review" ? "Review my financial picture and explain the main areas I should review next, using only these facts." : mode === "scenario" ? `${question}\nScenario facts: ${JSON.stringify(body.scenario || {})}` : question;
     const ai = await callProvider(system, userPrompt);
     const answer = ai || fallbackAnswer(question, f);
@@ -242,7 +237,7 @@ Deno.serve(async (req) => {
     const safeDatabaseCode = /^[A-Z0-9_]{3,32}$/.test(databaseCode) ? databaseCode : "";
     let status = 500;
     let code = "AI_INTERNAL";
-    let safeMessage = "Dhanive could not complete the AI request. Please check the Edge Function logs and try again.";
+    let safeMessage = "DhanView could not complete the AI request. Please check the Edge Function logs and try again.";
 
     if (error instanceof QuotaError) {
       status = error.status;

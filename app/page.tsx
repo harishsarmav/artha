@@ -74,10 +74,10 @@ export default function Home() {
   const [loadingData, setLoadingData] = useState(true);
   const [saveBusy, setSaveBusy] = useState(false);
   const [error, setError] = useState("");
-  const [aiError, setAiError] = useState("");
   const [toast, setToast] = useState("");
   const [profileMenu, setProfileMenu] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [themeMode, setThemeMode] = useState<"system" | "light" | "dark">("system");
   const [modal, setModal] = useState<ModalType>("");
   const [edit, setEdit] = useState<any>(null);
   const [form, setForm] = useState<FormState>({});
@@ -117,12 +117,27 @@ export default function Home() {
   useEffect(() => {
     let savedTheme: string | null = null;
     try { savedTheme = window.localStorage.getItem("artha-theme"); } catch { /* Use the system preference when browser storage is unavailable. */ }
-    const initialTheme = savedTheme === "dark" || savedTheme === "light"
-      ? savedTheme
-      : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    const mode = savedTheme === "dark" || savedTheme === "light" ? savedTheme : "system";
+    setThemeMode(mode);
+    const initialTheme = mode === "system"
+      ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+      : mode;
     setTheme(initialTheme);
     document.documentElement.dataset.theme = initialTheme;
   }, []);
+
+  useEffect(() => {
+    if (themeMode !== "system") return;
+    const systemPreference = window.matchMedia("(prefers-color-scheme: dark)");
+    const followSystemPreference = () => {
+      const nextTheme = systemPreference.matches ? "dark" : "light";
+      setTheme(nextTheme);
+      document.documentElement.dataset.theme = nextTheme;
+    };
+    followSystemPreference();
+    systemPreference.addEventListener("change", followSystemPreference);
+    return () => systemPreference.removeEventListener("change", followSystemPreference);
+  }, [themeMode]);
 
   useEffect(() => {
     try {
@@ -132,10 +147,17 @@ export default function Home() {
   }, []);
 
   const toggleTheme = () => {
-    const nextTheme = theme === "dark" ? "light" : "dark";
+    const nextMode = themeMode === "system" ? "light" : themeMode === "light" ? "dark" : "system";
+    const nextTheme = nextMode === "system"
+      ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+      : nextMode;
+    setThemeMode(nextMode);
     setTheme(nextTheme);
     document.documentElement.dataset.theme = nextTheme;
-    try { window.localStorage.setItem("artha-theme", nextTheme); } catch { /* The selected theme still applies for this visit. */ }
+    try {
+      if (nextMode === "system") window.localStorage.removeItem("artha-theme");
+      else window.localStorage.setItem("artha-theme", nextMode);
+    } catch { /* The selected theme still applies for this visit. */ }
   };
 
   const closeModal = () => { setModal(""); setEdit(null); setForm({}); setSecurityPassword(""); setSecurityConfirm(""); };
@@ -233,7 +255,7 @@ export default function Home() {
 
   async function importLegacyData() {
     if (!legacyDataAvailable || !profile.id || legacyImportBusy) return;
-    const approved = window.confirm("Import older Artha data? This copies profile and portfolio records from this browser into your signed-in Dhanive Supabase account. Nothing is transferred unless you choose OK. The browser copy will be kept.");
+    const approved = window.confirm("Import older Artha data? This copies profile and portfolio records from this browser into your signed-in DhanView Supabase account. Nothing is transferred unless you choose OK. The browser copy will be kept.");
     if (!approved) return;
     const read = (key: string) => { try { return JSON.parse(window.localStorage.getItem(key) || "null"); } catch { return null; } };
     const list = (key: string) => { const value = read(key); return Array.isArray(value) ? value.filter((row) => row && typeof row === "object") : []; };
@@ -439,7 +461,7 @@ export default function Home() {
   function localFallbackAnswer(nextQuestion: string, mode: "chat" | "review" | "scenario") {
     const f = financials;
     const q = nextQuestion.toLowerCase();
-    const lines = ["### Dhanive's engine-based view", ""];
+    const lines = ["### DhanView's engine-based view", ""];
 
     if (f.monthlyIncome > 0) {
       lines.push(
@@ -503,7 +525,7 @@ export default function Home() {
       );
     }
 
-    lines.push("", "This fallback uses Dhanive's deterministic engine facts only; no AI inference was used.");
+    lines.push("", "This fallback uses DhanView's deterministic engine facts only; no AI inference was used.");
     return lines.join("\n");
   }
 
@@ -845,7 +867,7 @@ export default function Home() {
   }
 
   async function removeRow(table: string, id: string) {
-    if (!window.confirm("Delete this item from your Dhanive account?")) return;
+    if (!window.confirm("Delete this item from your DhanView account?")) return;
     const { error } = await supabase.from(table).delete().eq("id", id).eq("user_id", profile.id);
     if (error) { setError("Unable to delete this item. Please try again."); return; }
     if (table === "income") setIncome(v=>v.filter(x=>x.id!==id));
@@ -866,18 +888,18 @@ export default function Home() {
     showToast("Deleted.");
   }
 
-  async function askDhanive(
+  async function askDhanView(
     nextQuestion = question,
     mode: "chat" | "review" | "scenario" = "chat",
     scenarioPayload: any = undefined
   ) {
     if (!nextQuestion.trim()) {
-      setAiError("Choose a question or type your own first.");
+      setError("Choose a question or type your own first.");
       return;
     }
 
     setAiLoading(true);
-    setAiError("");
+    setError("");
     setAnswer("");
 
     const target = getAiTarget();
@@ -933,7 +955,9 @@ export default function Home() {
         setAnswer(localFallbackAnswer(nextQuestion, mode));
         showToast("Local AI is unavailable; showing engine-based guidance.");
       } else {
-        setAiError(err instanceof Error ? err.message : "Unable to get guidance.");
+        setError(
+          err instanceof Error ? err.message : "Unable to get guidance."
+        );
       }
     } finally {
       setAiLoading(false);
@@ -978,7 +1002,7 @@ export default function Home() {
 
       if (!target) {
         setField("category", localCategory);
-        showToast(`Dhanive categorized this as ${localCategory}.`);
+        showToast(`DhanView categorized this as ${localCategory}.`);
         return;
       }
 
@@ -1018,11 +1042,11 @@ export default function Home() {
 
       const category = data.category || localCategory;
       setField("category", category);
-      showToast(`Dhanive categorized this as ${category}.`);
+      showToast(`DhanView categorized this as ${category}.`);
     } catch (err) {
       if (typeof window !== "undefined" && window.location.hostname === "localhost") {
         setField("category", localCategory);
-        showToast(`Dhanive categorized this as ${localCategory}.`);
+        showToast(`DhanView categorized this as ${localCategory}.`);
       } else {
         setError(err instanceof Error ? err.message : "Unable to categorize.");
       }
@@ -1045,14 +1069,14 @@ export default function Home() {
     closeModal(); showToast("Password updated.");
   }
 
-  if (!sessionReady || loadingData) return <div className="loading"><div><div className="loadingMark">✦</div><strong>Loading your Dhanive workspace…</strong></div></div>;
+  if (!sessionReady || loadingData) return <div className="loading"><div><div className="loadingMark">✦</div><strong>Loading your DhanView workspace…</strong></div></div>;
   if (authConnectionError) return <main className="loading"><div role="alert"><div className="loadingMark">!</div><strong>Can&apos;t reach Supabase</strong><p>Check your internet connection and that this app uses the active Supabase project URL, then retry.</p><button className="primary" type="button" onClick={() => window.location.reload()}>Retry connection</button></div></main>;
 
   return (
     <main className="shell">
-      <header className="appHeader"><div className="headerInner"><div className="brandWrap"><div className="brandSymbol" aria-hidden="true">✦</div><div><div className="brand">Dhanive</div><div className="tag">Personal finance &amp; planning</div></div></div><div className="headerActions"><button className="themeToggle" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}><span aria-hidden="true">{theme === "dark" ? "☼" : "☾"}</span><span className="themeToggleLabel">{theme === "dark" ? "Light" : "Dark"}</span></button><div className="secureBadge"><span>●</span> Secure</div><div className="profileArea"><button className="profileButton" onClick={()=>setProfileMenu(v=>!v)} aria-expanded={profileMenu}><span className="profileAvatar">{(profile.name||"A").charAt(0).toUpperCase()}</span><span className="profileButtonText">{profile.name || "Profile"}</span><span className="profileChevron">{profileMenu?"⌃":"⌄"}</span></button>{profileMenu && <div className="profileMenu"><button className="profileMenuUser profileMenuUserButton" onClick={()=>{setProfileMenu(false);openModal("profile");}}><span className="profileMenuAvatar">{(profile.name||"A").charAt(0).toUpperCase()}</span><span><strong>{profile.name||"Your profile"}</strong><small>Personal account</small></span></button><div className="profileMenuDivider"/><button className="profileMenuItem" onClick={()=>{setProfileMenu(false);openModal("profile");}}>👤 <span>Profile settings</span></button><button className="profileMenuItem" onClick={()=>{setProfileMenu(false);openModal("security");}}>🔐 <span>Account & security</span></button><button className="profileMenuItem signOut" onClick={handleSignOut}>↪ <span>Sign out</span></button></div>}</div></div></div></header>
+      <header className="appHeader"><div className="headerInner"><div className="brandWrap"><div className="brandSymbol" aria-hidden="true">✦</div><div><div className="brand">DhanView</div><div className="tag">Personal finance &amp; planning</div></div></div><div className="headerActions"><button className="themeToggle" type="button" onClick={toggleTheme} aria-label={`Theme is ${themeMode}; switch to ${themeMode === "system" ? "light" : themeMode === "light" ? "dark" : "system"}`} title={`Theme: ${themeMode}. Click to switch to ${themeMode === "system" ? "light" : themeMode === "light" ? "dark" : "system"}.`}><span aria-hidden="true">{themeMode === "system" ? "◐" : theme === "dark" ? "☼" : "☾"}</span><span className="themeToggleLabel">{themeMode === "system" ? "System" : theme === "dark" ? "Light" : "Dark"}</span></button><div className="secureBadge"><span>●</span> Secure</div><div className="profileArea"><button className="profileButton" onClick={()=>setProfileMenu(v=>!v)} aria-expanded={profileMenu}><span className="profileAvatar">{(profile.name||"A").charAt(0).toUpperCase()}</span><span className="profileButtonText">{profile.name || "Profile"}</span><span className="profileChevron">{profileMenu?"⌃":"⌄"}</span></button>{profileMenu && <div className="profileMenu"><button className="profileMenuUser profileMenuUserButton" onClick={()=>{setProfileMenu(false);openModal("profile");}}><span className="profileMenuAvatar">{(profile.name||"A").charAt(0).toUpperCase()}</span><span><strong>{profile.name||"Your profile"}</strong><small>Personal account</small></span></button><div className="profileMenuDivider"/><button className="profileMenuItem" onClick={()=>{setProfileMenu(false);openModal("profile");}}>👤 <span>Profile settings</span></button><button className="profileMenuItem" onClick={()=>{setProfileMenu(false);openModal("security");}}>🔐 <span>Account & security</span></button><button className="profileMenuItem signOut" onClick={handleSignOut}>↪ <span>Sign out</span></button></div>}</div></div></div></header>
 
-      <section className="hero" id="overview"><div><div className="eyebrow">YOUR MONEY, ONE PLACE</div><h1>Hi {profile.name || "there"} 👋<br/>Let&apos;s understand your money.</h1><p>Track cash flow, investments, loans, protection and goals. Dhanive keeps the calculations deterministic and uses AI to explain what the numbers mean.</p></div><div className="heroActions"><button className="primary" onClick={()=>openModal("transaction")}>＋ Add transaction</button><button className="secondary" onClick={()=>openModal("profile")}>Edit profile</button></div></section>
+      <section className="hero" id="overview"><div><div className="eyebrow">YOUR MONEY, ONE PLACE</div><h1>Hi {profile.name || "there"} 👋<br/>Let&apos;s understand your money.</h1><p>Track cash flow, investments, loans, protection and goals. DhanView keeps the calculations deterministic and uses AI to explain what the numbers mean.</p></div><div className="heroActions"><button className="primary" onClick={()=>openModal("transaction")}>＋ Add transaction</button><button className="secondary" onClick={()=>openModal("profile")}>Edit profile</button></div></section>
 
       {legacyDataAvailable && <section className="card" role="status" style={{ marginTop: 20, padding: 20 }}><div className="eyebrow">OLDER BROWSER DATA</div><h2>We found data from an earlier Artha version</h2><p>It remains in this browser and has not been uploaded. You can leave it here, or explicitly copy profile and portfolio records into this signed-in account. The local copy will be kept.</p><button className="primary" type="button" onClick={importLegacyData} disabled={legacyImportBusy}>{legacyImportBusy ? "Importing…" : "Review and import older data"}</button></section>}
 
@@ -1069,7 +1093,7 @@ export default function Home() {
           <div>
             <div className="eyebrow">PLAN YOUR NEXT MOVE</div>
             <h2>Make your next big decision with confidence.</h2>
-            <p>Choose a life goal and Dhanive will use your financial picture to help you explore the trade-offs.</p>
+            <p>Choose a life goal and DhanView will use your financial picture to help you explore the trade-offs.</p>
           </div>
           <span className="planningBadge">Portfolio-aware guidance</span>
         </div>
@@ -1079,20 +1103,20 @@ export default function Home() {
             ["▣", "Car planning", "Compare purchase price, EMI and total ownership cost.", "Help me plan a car purchase. Evaluate on-road price, down payment, loan EMI, fuel, insurance, maintenance and total ownership cost. Check the impact on my savings, emergency fund and other goals. Ask for missing information."],
             ["◎", "Goal planning", "Turn a target amount and timeline into a savings plan.", "Help me create a goal-based savings plan. Review my existing goals and portfolio, calculate the monthly contribution needed for a target and timeline, and explain assumptions and trade-offs. Ask me for missing information."],
             ["⇄", "Debt planning", "Prioritise repayments and compare prepayment scenarios.", "Review my debts and help me build a repayment strategy. Compare avalanche and snowball approaches, EMI changes and prepayment scenarios using my actual loan data. Explain any assumptions and ask for missing information."],
-            ["◇", "Financial safety", "Review emergency savings, insurance and cash-flow resilience.", "Run a financial safety review using my Dhanive data. Assess emergency fund coverage, debt exposure, insurance information and cash-flow resilience. Identify missing information and prioritise practical next steps."],
+            ["◇", "Financial safety", "Review emergency savings, insurance and cash-flow resilience.", "Run a financial safety review using my DhanView data. Assess emergency fund coverage, debt exposure, insurance information and cash-flow resilience. Identify missing information and prioritise practical next steps."],
             ["↗", "Retirement planning", "Estimate your future needs and long-term savings gap.", "Help me plan for retirement. Estimate inflation-adjusted future expenses and the savings gap using my age, existing investments and goals where available. Clearly label assumptions and ask for missing information."]
           ].map(([icon, title, description, prompt], index) => (
             <button className="planningCard" key={title} onClick={() => {
               setQuestion(prompt);
               setAnswer("");
-              setAiError("");
+              setError("");
               document.getElementById("ai-coach")?.scrollIntoView({ behavior: "smooth", block: "start" });
             }}>
               <span className="planningArt" aria-hidden="true" style={{ backgroundImage: `url("${process.env.NEXT_PUBLIC_BASE_PATH || ""}/planning/${planningBackgrounds[index]}")` }} />
               <span className="planningIcon" aria-hidden="true">{icon}</span>
               <strong>{title}</strong>
               <span>{description}</span>
-              <em>Plan with Dhanive <b>→</b></em>
+              <em>Plan with DhanView <b>→</b></em>
             </button>
           ))}
         </div>
@@ -1135,7 +1159,7 @@ export default function Home() {
           {portfolioTab === "goals" && <><div className="listSummary"><div><span>Total saved toward goals</span><strong>{goals.length ? money(financials.goals.reduce((total, goal) => total + goal.currentAmount, 0)) : "—"}</strong></div><small>{goals.length ? `${money(financials.goals.reduce((total, goal) => total + goal.targetAmount, 0))} target total · ${money(financials.goals.reduce((total, goal) => total + goal.requiredMonthlyContribution, 0))}/mo needed across all goals` : "Add goals to track targets and monthly contributions"}</small></div>{goals.length>0 && <button className="listToggle" type="button" aria-expanded={showAllGoals} aria-controls="goal-records" onClick={()=>setShowAllGoals(v=>!v)}>{showAllGoals?"Hide goals":`Manage goals (${goals.length})`}</button>}{goals.length===0 && <Empty text="No goals added yet." />}<div id="goal-records" hidden={!showAllGoals}>{financials.goals.map((item,index)=>{const storedGoal=goals.find(g=>g.name===item.name && g.targetAmount===item.targetAmount && g.currentAmount===item.currentAmount && g.targetDate===item.targetDate) || goals[index];return <div className="goal" key={storedGoal?.id || `${item.name}-${index}`}><div><b>{item.name}</b><small>{money(item.currentAmount)} of {money(item.targetAmount)} · {item.progress.toFixed(0)}% · {item.monthsRemaining} months left</small></div><div className="goalValue">{money(item.requiredMonthlyContribution)}/mo</div><div className="progress"><i style={{width:`${item.progress}%`}}/></div><div className="goalActions"><Actions onEdit={()=>storedGoal && openModal("goal",storedGoal)} onDelete={()=>{if(storedGoal?.id) removeRow("goals",storedGoal.id);}}/></div></div>})}</div></>}
         </div>
       </section>
-      <section className="wideGrid"><div className="card block"><div className="blockhead"><div><div className="eyebrow">SPENDING PATTERN</div><h2>Where your recurring money goes</h2><p>Monthly normalized values from your expense records.</p></div></div>{spendingByCategory.length ? <div className="categoryBars">{spendingByCategory.map(([category, amount])=><div className="categoryBar" key={category}><div><span>{category}</span><b>{money(amount)}</b></div><div className="barTrack"><i style={{width:`${Math.min(100,(amount/Math.max(1,spendingByCategory[0][1]))*100)}%`}}/></div></div>)}</div> : <Empty text="Add expenses to see spending patterns." />}</div><div className="card block"><div className="blockhead"><div><div className="eyebrow">SCENARIO LAB</div><h2>What if I save more?</h2><p>A simple deterministic scenario. The amount is kept in this browser only after you change it.</p></div></div>{hasCashFlowInputs ? <><label className="label">Extra monthly saving <b>{money(scenarioExtra)}</b></label><input className="range" type="range" min="0" max="50000" step="1000" value={scenarioExtra} onChange={e=>updateScenarioExtra(numberValue(e.target.value))}/><div className="scenarioCards"><Metric label="Next free cash flow" value={money(scenario.nextFreeCashFlow)} /><Metric label="Emergency months after 12 mo" value={financials.essentialMonthlyExpenses > 0 ? `${scenario.nextEmergencyMonths.toFixed(1)} mo` : "—"} /><Metric label="Cash after goal contributions" value={goals.length ? money(scenario.cashAfterGoals) : "—"} /></div><small className="scenarioNote">Combined monthly goal contributions: {money(scenario.goalContributionNeed)}. Monthly investment contributions of {money(financials.investmentContributions)} are already counted in free cash flow.</small><button className="secondary fullScenario" onClick={()=>{openModal("scenario");setAnswer("");}}>Ask Dhanive to explain</button></> : <Empty text="Add income, expenses, loans, or investments before running a scenario." />}</div></section>
+      <section className="wideGrid"><div className="card block"><div className="blockhead"><div><div className="eyebrow">SPENDING PATTERN</div><h2>Where your recurring money goes</h2><p>Monthly normalized values from your expense records.</p></div></div>{spendingByCategory.length ? <div className="categoryBars">{spendingByCategory.map(([category, amount])=><div className="categoryBar" key={category}><div><span>{category}</span><b>{money(amount)}</b></div><div className="barTrack"><i style={{width:`${Math.min(100,(amount/Math.max(1,spendingByCategory[0][1]))*100)}%`}}/></div></div>)}</div> : <Empty text="Add expenses to see spending patterns." />}</div><div className="card block"><div className="blockhead"><div><div className="eyebrow">SCENARIO LAB</div><h2>What if I save more?</h2><p>A simple deterministic scenario. The amount is kept in this browser only after you change it.</p></div></div>{hasCashFlowInputs ? <><label className="label">Extra monthly saving <b>{money(scenarioExtra)}</b></label><input className="range" type="range" min="0" max="50000" step="1000" value={scenarioExtra} onChange={e=>updateScenarioExtra(numberValue(e.target.value))}/><div className="scenarioCards"><Metric label="Next free cash flow" value={money(scenario.nextFreeCashFlow)} /><Metric label="Emergency months after 12 mo" value={financials.essentialMonthlyExpenses > 0 ? `${scenario.nextEmergencyMonths.toFixed(1)} mo` : "—"} /><Metric label="Cash after goal contributions" value={goals.length ? money(scenario.cashAfterGoals) : "—"} /></div><small className="scenarioNote">Combined monthly goal contributions: {money(scenario.goalContributionNeed)}. Monthly investment contributions of {money(financials.investmentContributions)} are already counted in free cash flow.</small><button className="secondary fullScenario" onClick={()=>{openModal("scenario");setAnswer("");}}>Ask DhanView to explain</button></> : <Empty text="Add income, expenses, loans, or investments before running a scenario." />}</div></section>
 
       <section className="card monthTracker" id="transactions" aria-labelledby="month-tracker-title">
         <div className="blockhead monthTrackerHead">
@@ -1170,14 +1194,14 @@ export default function Home() {
         </>}
       </section>
 
-      <section className="card coach" id="ai-coach"><div className="coachIntro"><div><div className="eyebrow">✦ DHANIVE AI COACH</div><h2>Ask Dhanive anything about your money.</h2><p>For production AI guidance, Dhanive retrieves your records securely and sends calculated financial summaries to the configured AI provider. Your login credentials are never sent. The Financial Engine remains the source of truth.</p></div><div className="coachMark">✦</div></div><div className="coachDifference" aria-label="How Dhanive is different"><article><strong>Your numbers lead</strong><span>A deterministic engine calculates your financial picture; AI explains the results.</span></article><article><strong>Plans connect</strong><span>Home, car, debt, safety, goals and retirement use one financial picture.</span></article><article><strong>Unknowns stay visible</strong><span>Missing inputs and assumptions are called out instead of filled in for you.</span></article></div><div className="prompts">{prompts.map(([icon,title,text])=><button className={`prompt ${question===text?"selected":""}`} key={title} onClick={()=>{setQuestion(text);setAnswer("");setAiError("")}}><em>{icon}</em><strong>{title}</strong><small>Use prompt →</small></button>)}</div><label className="label" htmlFor="coach-question">Or ask your own question</label><textarea id="coach-question" value={question} onChange={e=>{setQuestion(e.target.value);setAiError("")}} placeholder="Example: How should I balance my emergency fund and investing?" rows={5}/><small className="note">On localhost, Dhanive uses the local AI gateway at <code>http://localhost:8787/api/coach</code>. If it is unavailable, Dhanive automatically falls back to deterministic engine guidance.</small><div className="coachActions"><button className="primary" disabled={aiLoading} onClick={()=>askDhanive()}>{aiLoading?"Dhanive is thinking…":"Ask Dhanive for guidance →"}</button><button className="secondary" disabled={aiLoading} onClick={()=>askDhanive("Review my finances and tell me the main areas I should review next. Use only the facts in my Dhanive data.","review")}>Run financial review</button></div>{aiError && <div className="error coachError" role="alert">{aiError}</div>}{answer && <div className="output"><div className="outputTitle">Dhanive says</div><div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></div></div>}<small className="note">Educational guidance only. Dhanive is not a SEBI-registered investment adviser or IRDAI insurance intermediary. Always verify product-specific decisions and current rules independently.</small></section>
+      <section className="card coach" id="ai-coach"><div className="coachIntro"><div><div className="eyebrow">✦ DHANVIEW AI COACH</div><h2>Ask DhanView anything about your money.</h2><p>For production AI guidance, DhanView retrieves your records securely and sends calculated financial summaries to the configured AI provider. Your login credentials are never sent. The Financial Engine remains the source of truth.</p></div><div className="coachMark">✦</div></div><div className="coachDifference" aria-label="How DhanView is different"><article><strong>Your numbers lead</strong><span>A deterministic engine calculates your financial picture; AI explains the results.</span></article><article><strong>Plans connect</strong><span>Home, car, debt, safety, goals and retirement use one financial picture.</span></article><article><strong>Unknowns stay visible</strong><span>Missing inputs and assumptions are called out instead of filled in for you.</span></article></div><div className="prompts">{prompts.map(([icon,title,text])=><button className={`prompt ${question===text?"selected":""}`} key={title} onClick={()=>{setQuestion(text);setAnswer("");setError("")}}><em>{icon}</em><strong>{title}</strong><small>Use prompt →</small></button>)}</div><label className="label" htmlFor="coach-question">Or ask your own question</label><textarea id="coach-question" value={question} onChange={e=>setQuestion(e.target.value)} placeholder="Example: How should I balance my emergency fund and investing?" rows={5}/><small className="note">On localhost, DhanView uses the local AI gateway at <code>http://localhost:8787/api/coach</code>. If it is unavailable, DhanView automatically falls back to deterministic engine guidance.</small><div className="coachActions"><button className="primary" disabled={aiLoading} onClick={()=>askDhanView()}>{aiLoading?"DhanView is thinking…":"Ask DhanView for guidance →"}</button><button className="secondary" disabled={aiLoading} onClick={()=>askDhanView("Review my finances and tell me the main areas I should review next. Use only the facts in my DhanView data.","review")}>Run financial review</button></div>{answer && <div className="output"><div className="outputTitle">DhanView says</div><div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></div></div>}<small className="note">Educational guidance only. DhanView is not a SEBI-registered investment adviser or IRDAI insurance intermediary. Always verify product-specific decisions and current rules independently.</small></section>
 
-      <footer className="footer"><div><strong>Dhanive</strong><span>Personal finance &amp; planning</span><Link href="/release-notes/">Release notes <span aria-hidden="true">↗</span></Link></div><div>Built with <span aria-label="love">♥</span> by <b>Harish Sarma</b> · © 2026</div></footer>
+      <footer className="footer"><div><strong>DhanView</strong><span>Personal finance &amp; planning</span><Link href="/release-notes/">Release notes <span aria-hidden="true">↗</span></Link></div><div>Built with <span aria-label="love">♥</span> by <b>Harish Sarma</b> · © 2026</div></footer>
 
       {modal === "profile" && <Modal title="Profile settings" close={closeModal} save={saveModal} busy={saveBusy} error={error}><div className="formGrid two"><Field label="Your name"><input value={form.name||""} onChange={e=>setField("name",e.target.value)}/></Field><Field label="Age"><input type="number" min="18" max="100" value={form.age||""} onChange={e=>setField("age",e.target.value)}/></Field><Field label="Dependents"><input type="number" min="0" value={form.dependents||""} onChange={e=>setField("dependents",e.target.value)}/></Field><Field label="Country"><input value={form.country||""} onChange={e=>setField("country",e.target.value)} placeholder="Optional"/></Field><Field label="Primary goal"><select value={form.primaryGoal||""} onChange={e=>setField("primaryGoal",e.target.value)}><option value="">Not set</option>{["Build emergency fund","Save for marriage","Invest more","Pay off debt","Major purchase","Build wealth","Other"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Risk profile"><select value={form.riskProfile||""} onChange={e=>setField("riskProfile",e.target.value)}><option value="">Not assessed</option>{["Conservative","Moderate","Aggressive"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Investment horizon"><select value={form.investmentHorizon||""} onChange={e=>setField("investmentHorizon",e.target.value)}><option value="">Not set</option>{["< 1 year","1–3 years","3–5 years","5+ years"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Liquid emergency savings"><input type="number" min="0" value={form.cashSavings||""} onChange={e=>setField("cashSavings",e.target.value)}/></Field><Field label="Life / term cover"><input type="number" min="0" value={form.lifeCover||""} onChange={e=>setField("lifeCover",e.target.value)}/></Field><Field label="Health cover"><input type="number" min="0" value={form.healthCover||""} onChange={e=>setField("healthCover",e.target.value)}/></Field></div></Modal>}
       {modal === "security" && <Modal title="Account & security" close={closeModal} save={updatePassword} busy={false}><div className="securityPanel"><div className="securityItem"><span>Signed-in email</span><b>{authEmail || "Authenticated account"}</b></div><div className="securityItem"><span>Data protection</span><b>Supabase Auth + Postgres RLS</b></div><div className="securityItem"><span>Change password</span><b>Updates your current account password</b></div><Field label="New password"><input type="password" minLength={8} value={securityPassword} onChange={e=>setSecurityPassword(e.target.value)} placeholder="At least 8 characters"/></Field><Field label="Confirm new password"><input type="password" minLength={8} value={securityConfirm} onChange={e=>setSecurityConfirm(e.target.value)} placeholder="Re-enter password"/></Field></div></Modal>}
       {(modal === "income" || modal === "expense" || modal === "investment" || modal === "loan" || modal === "insurance" || modal === "goal" || modal === "transaction") && <DataModal type={modal} form={form} setField={setField} saveModal={saveModal} closeModal={closeModal} busy={saveBusy} error={error} autoCategorize={modal === "transaction" ? autoCategorize : undefined} categorizing={categorizing} />}
-      {modal === "scenario" && <Modal title="Scenario explanation" close={closeModal} wide><div className="scenarioExplain"><div className="scenarioCards"><Metric label="Extra saving" value={money(scenarioExtra)} /><Metric label="Next free cash flow" value={money(scenario.nextFreeCashFlow)} /><Metric label="After goal contributions" value={goals.length ? money(scenario.cashAfterGoals) : "—"} /><Metric label="Emergency cover after 12 mo" value={`${scenario.nextEmergencyMonths.toFixed(1)} months`} /></div><button className="primary" disabled={aiLoading} onClick={()=>askDhanive(`I am considering adding ${money(scenarioExtra)} of extra monthly savings. Explain what this changes in my current Dhanive financial picture, including cash flow, emergency fund coverage and goal funding. Use the engine facts only.`,"scenario",{...scenario,extraMonthlySaving:scenarioExtra})}>{aiLoading?"Dhanive is thinking…":"Ask Dhanive to explain this scenario →"}</button>{aiError && <div className="error coachError" role="alert">{aiError}</div>}{answer && <div className="output"><div className="outputTitle">Dhanive says</div><div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></div></div>}</div></Modal>}
+      {modal === "scenario" && <Modal title="Scenario explanation" close={closeModal} wide><div className="scenarioExplain"><div className="scenarioCards"><Metric label="Extra saving" value={money(scenarioExtra)} /><Metric label="Next free cash flow" value={money(scenario.nextFreeCashFlow)} /><Metric label="After goal contributions" value={goals.length ? money(scenario.cashAfterGoals) : "—"} /><Metric label="Emergency cover after 12 mo" value={`${scenario.nextEmergencyMonths.toFixed(1)} months`} /></div><button className="primary" disabled={aiLoading} onClick={()=>askDhanView(`I am considering adding ${money(scenarioExtra)} of extra monthly savings. Explain what this changes in my current DhanView financial picture, including cash flow, emergency fund coverage and goal funding. Use the engine facts only.`,"scenario",{...scenario,extraMonthlySaving:scenarioExtra})}>{aiLoading?"DhanView is thinking…":"Ask DhanView to explain this scenario →"}</button>{answer && <div className="output"><div className="outputTitle">DhanView says</div><div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></div></div>}</div></Modal>}
     </main>
   );
 }
@@ -1210,7 +1234,7 @@ function Modal({title,close,save,busy,children,wide=false,error}:{title:string;c
 
 function DataModal({type,form,setField,saveModal,closeModal,busy,error,autoCategorize,categorizing}:{type:ModalType;form:FormState;setField:(k:string,v:string|number)=>void;saveModal:()=>void;closeModal:()=>void;busy:boolean;error?:string;autoCategorize?:()=>void;categorizing?:boolean}){
   const titles:Record<string,string>={income:"Add income",expense:"Add expense",investment:"Add investment",loan:"Add loan",insurance:"Add insurance",goal:"Add financial goal",transaction:"Add transaction"};
-  return <Modal title={titles[type]||"Dhanive"} close={closeModal} save={saveModal} busy={busy} error={error} wide={type==="investment"||type==="transaction"}><div className="formGrid two">
+  return <Modal title={titles[type]||"DhanView"} close={closeModal} save={saveModal} busy={busy} error={error} wide={type==="investment"||type==="transaction"}><div className="formGrid two">
     {type==="income" && <><Field label="Source"><input value={form.name||""} onChange={e=>setField("name",e.target.value)} placeholder="Salary, rent, freelance…"/></Field><Field label="Description"><select value={form.type||"Salary"} onChange={e=>setField("type",e.target.value)}>{incomeTypes.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Amount"><input type="number" min="0" value={form.amount||""} onChange={e=>setField("amount",e.target.value)}/></Field><Field label="Frequency"><select value={form.frequency||"Monthly"} onChange={e=>setField("frequency",e.target.value)}>{frequencies.map(v=><option key={v}>{v}</option>)}</select></Field></>}
     {type==="expense" && <><Field label="Description"><input value={form.name||""} onChange={e=>setField("name",e.target.value)} placeholder="Rent, groceries…"/></Field><Field label="Category"><select value={form.category||"Housing"} onChange={e=>setField("category",e.target.value)}>{expenseCategories.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Amount"><input type="number" min="0" value={form.amount||""} onChange={e=>setField("amount",e.target.value)}/></Field><Field label="Frequency"><select value={form.frequency||"Monthly"} onChange={e=>setField("frequency",e.target.value)}>{frequencies.map(v=><option key={v}>{v}</option>)}</select></Field></>}
     {type==="investment" && <><Field label="Name"><input value={form.name||""} onChange={e=>setField("name",e.target.value)} placeholder="SBI ELSS, stock…"/></Field><Field label="Type"><select value={form.type||"Mutual Fund"} onChange={e=>setField("type",e.target.value)}>{investmentTypes.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Category"><select value={form.category||"Equity"} onChange={e=>setField("category",e.target.value)}>{investmentCategories.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Mode"><select value={form.mode||"SIP"} onChange={e=>setField("mode",e.target.value)}>{["SIP","Lump sum","Employer","Other"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Monthly contribution"><input type="number" min="0" value={form.monthlyAmount||""} onChange={e=>setField("monthlyAmount",e.target.value)}/></Field><Field label="Total invested"><input type="number" min="0" value={form.investedAmount||""} onChange={e=>setField("investedAmount",e.target.value)}/></Field><Field label="Current value"><input type="number" min="0" value={form.currentValue||""} onChange={e=>setField("currentValue",e.target.value)}/></Field><Field label="Start date"><input type="date" value={form.startDate||""} onChange={e=>setField("startDate",e.target.value)}/></Field></>}

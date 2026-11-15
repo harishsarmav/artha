@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { ThemeSync } from "./theme-sync";
 
 export const metadata: Metadata = {
-  title: "Dhanive — Personal finance & planning",
+  title: "DhanView — Personal finance & planning",
   description: "A thoughtful personal finance and life planning workspace.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return <html lang="en"><body>{children}</body></html>;
+  return <html lang="en"><body><ThemeSync />{children}</body></html>;
 }
