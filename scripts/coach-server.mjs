@@ -3,6 +3,7 @@ import http from "node:http";
 const PORT = 8787;
 const OLLAMA_BASE = "http://127.0.0.1:11434";
 const MODEL = "gpt-oss:20b";
+const MAX_BODY_BYTES = 32_000;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "http://localhost:3000",
@@ -93,7 +94,7 @@ function buildFallbackAnswer(question, financialContext) {
   const emergency6 = normalizeNumber(f.emergencyFundTarget6Months);
 
   const lines = [
-    "### Artha's engine-based view",
+    "### Dhanive's engine-based view",
     "",
   ];
 
@@ -151,7 +152,7 @@ function buildFallbackAnswer(question, financialContext) {
 
   lines.push(
     "",
-    "This fallback uses Artha's deterministic engine facts only; no AI inference was used."
+    "This fallback uses Dhanive's deterministic engine facts only; no AI inference was used."
   );
 
   return lines.join("\n");
@@ -204,15 +205,25 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && req.url === "/api/coach") {
     try {
       let raw = "";
+      let bodyTooLarge = false;
 
       req.on("data", (chunk) => {
-        raw += chunk;
+        if (Buffer.byteLength(raw) + chunk.length > MAX_BODY_BYTES) {
+          bodyTooLarge = true;
+          return;
+        }
+        if (!bodyTooLarge) raw += chunk;
       });
 
       await new Promise((resolve, reject) => {
         req.on("end", resolve);
         req.on("error", reject);
       });
+
+      if (bodyTooLarge) {
+        sendJson(res, 413, { error: "Request body is too large." });
+        return;
+      }
 
       let body = {};
 
@@ -264,7 +275,7 @@ const server = http.createServer(async (req, res) => {
       );
 
       const system = `
-You are Artha, a careful Indian personal-finance coach.
+You are Dhanive, a careful Indian personal-finance coach.
 
 The Financial Engine is the source of truth.
 

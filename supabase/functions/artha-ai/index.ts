@@ -48,7 +48,7 @@ function numberValue(value: unknown) {
 
 function normalizeRows(data: any[] | null) { return data ?? []; }
 
-async function getUserContext(req: Request) {
+async function getAuthenticatedContext(req: Request) {
   const auth = req.headers.get("Authorization");
   if (!auth?.startsWith("Bearer ")) throw new AuthError("Authentication required.");
   const token = auth.replace(/^Bearer\s+/i, "");
@@ -58,23 +58,26 @@ async function getUserContext(req: Request) {
   });
   const { data: userData, error: userError } = await client.auth.getUser(token);
   if (userError || !userData.user) throw new AuthError("Your session is invalid or expired.");
-  const userId = userData.user.id;
-  const [profile, income, expenses, investments, loans, insurance, goals, transactions] = await Promise.all([
-    client.from("profiles").select("*").eq("id", userId).maybeSingle(),
-    client.from("income").select("*").eq("user_id", userId),
-    client.from("expenses").select("*").eq("user_id", userId),
-    client.from("investments").select("*").eq("user_id", userId),
-    client.from("loans").select("*").eq("user_id", userId),
-    client.from("insurance").select("*").eq("user_id", userId),
-    client.from("goals").select("*").eq("user_id", userId),
-    client.from("transactions").select("*").eq("user_id", userId).order("transaction_date", { ascending: false }).limit(100),
+  return { client, userId: userData.user.id };
+}
+
+async function getUserContext(authContext: { client: any; userId: string }) {
+  const { client, userId } = authContext;
+  const [profile, income, expenses, investments, loans, insurance, goals] = await Promise.all([
+    client.from("profiles").select("age,dependents,risk_profile,investment_horizon,primary_goal,life_cover,health_cover,cash_savings").eq("id", userId).maybeSingle(),
+    client.from("income").select("amount,frequency").eq("user_id", userId),
+    client.from("expenses").select("amount,frequency,category").eq("user_id", userId),
+    client.from("investments").select("invested_amount,current_value,monthly_amount,category").eq("user_id", userId),
+    client.from("loans").select("outstanding,emi,interest_rate,type").eq("user_id", userId),
+    client.from("insurance").select("type,coverage,premium,frequency").eq("user_id", userId),
+    client.from("goals").select("target_amount,current_amount,target_date").eq("user_id", userId),
   ]);
-  const firstError = [profile, income, expenses, investments, loans, insurance, goals, transactions].find((x) => x.error)?.error;
+  const firstError = [profile, income, expenses, investments, loans, insurance, goals].find((x) => x.error)?.error;
   if (firstError) throw firstError;
   const profileRow = profile.data ?? {};
   const input = {
     profile: {
-      name: profileRow.name ?? userData.user.user_metadata?.full_name ?? "",
+      name: "",
       age: numberValue(profileRow.age), dependents: numberValue(profileRow.dependents), riskProfile: profileRow.risk_profile ?? "",
       investmentHorizon: profileRow.investment_horizon ?? "", primaryGoal: profileRow.primary_goal ?? "",
       lifeCover: numberValue(profileRow.life_cover), healthCover: numberValue(profileRow.health_cover), cashSavings: numberValue(profileRow.cash_savings),
@@ -84,9 +87,9 @@ async function getUserContext(req: Request) {
     investments: normalizeRows(investments.data).map((x:any)=>({investedAmount:numberValue(x.invested_amount),currentValue:numberValue(x.current_value),monthlyAmount:numberValue(x.monthly_amount),category:x.category||"Other"})),
     loans: normalizeRows(loans.data).map((x:any)=>({outstanding:numberValue(x.outstanding),emi:numberValue(x.emi),interestRate:numberValue(x.interest_rate),type:x.type||"Other"})),
     insurance: normalizeRows(insurance.data).map((x:any)=>({type:x.type||"Other",coverage:numberValue(x.coverage),premium:numberValue(x.premium),frequency:x.frequency||"Yearly"})),
-    goals: normalizeRows(goals.data).map((x:any)=>({name:x.name,targetAmount:numberValue(x.target_amount),currentAmount:numberValue(x.current_amount),targetDate:x.target_date})),
+    goals: normalizeRows(goals.data).map((x:any,index:number)=>({name:`Goal ${index + 1}`,targetAmount:numberValue(x.target_amount),currentAmount:numberValue(x.current_amount),targetDate:x.target_date})),
   };
-  return { client, userId, profileRow, transactions: normalizeRows(transactions.data), financials: calculateFinancials(input) };
+  return { ...authContext, financials: calculateFinancials(input) };
 }
 
 function deterministicCategory(description: string, transactionType: string) {
@@ -107,7 +110,7 @@ function deterministicCategory(description: string, transactionType: string) {
 
 function fallbackAnswer(question: string, f: any) {
   const q = question.toLowerCase();
-  const lines: string[] = ["### Artha's engine-based view", ""];
+  const lines: string[] = ["### Dhanive's engine-based view", ""];
   if (f.monthlyIncome === 0) lines.push("You have not entered recurring income yet, so cash-flow conclusions are limited.");
   else {
     lines.push(`Your normalized monthly income is **${Math.round(f.monthlyIncome).toLocaleString("en-IN")}** and monthly outflow is **${Math.round(f.monthlyOutflow).toLocaleString("en-IN")}**.`);
@@ -138,7 +141,7 @@ async function consumeDailyQuota(client: any, userId: string) {
   });
   if (error) {
     if (error.message?.includes("AI_DAILY_LIMIT_REACHED")) {
-      throw new QuotaError(`Daily AI limit reached (${limit} requests). Your deterministic Artha engine is still available.`);
+      throw new QuotaError(`Daily AI limit reached (${limit} requests). Your deterministic Dhanive engine is still available.`);
     }
     throw error;
   }
@@ -155,6 +158,7 @@ async function callProvider(system: string, user: string) {
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+    signal: AbortSignal.timeout(20_000),
     body: JSON.stringify({ model, temperature: 0.2, messages: [{ role:"system", content:system }, { role:"user", content:user }] }),
   });
   if (!response.ok) throw new Error(`AI provider returned HTTP ${response.status}.`);
@@ -191,13 +195,12 @@ Deno.serve(async (req) => {
     }
     const question = String(body.question || "").trim().slice(0, 6000);
     if (!question) return json(req, { error: "A question is required." }, 400);
-    const ctx = await getUserContext(req);
-    const f = ctx.financials;
+    const authContext = await getAuthenticatedContext(req);
 
     if (mode === "categorize") {
       const baseCategory = deterministicCategory(question, String(body.transactionType || "Expense"));
       if (baseCategory !== "Other") return json(req, { category: baseCategory, confidence: 0.85, reason: "Matched a deterministic transaction rule." });
-      await consumeDailyQuota(ctx.client, ctx.userId);
+      await consumeDailyQuota(authContext.client, authContext.userId);
       const system = "Classify the transaction into exactly one category: Housing, Food, Transport, Utilities, Healthcare, Shopping, Entertainment, Debt / EMI, Investments, Income, Other. Return only JSON: {\"category\":\"...\",\"confidence\":0.0,\"reason\":\"...\"}. Never invent merchant facts.";
       // The amount is not needed to categorize; send only the description and type.
       const ai = await callProvider(system, `Transaction description: ${question}\nType: ${String(body.transactionType||"Expense")}`);
@@ -207,6 +210,8 @@ Deno.serve(async (req) => {
       return json(req, { category: "Other", confidence: 0.25, reason: "Not enough information for a reliable category." });
     }
 
+    const ctx = await getUserContext(authContext);
+    const f = ctx.financials;
     await consumeDailyQuota(ctx.client, ctx.userId);
     // Minimize third-party disclosure: never send names of the user's goals.
     const providerFacts = {
@@ -216,7 +221,7 @@ Deno.serve(async (req) => {
         : [],
     };
     const facts = JSON.stringify(providerFacts, null, 2);
-    const system = `You are Artha, a careful Indian personal-finance coach. The Financial Engine is the source of truth. Use only the supplied calculated facts and user records. Do not silently recalculate, invent missing numbers, or claim access to bank/broker data. Explain assumptions clearly. For investment/insurance topics, provide educational decision factors rather than product recommendations. If facts are missing, say so. Keep answers practical and readable in markdown.\n\nCALCULATED FACTS:\n${facts}`;
+    const system = `You are Dhanive, a careful Indian personal-finance coach. The Financial Engine is the source of truth. Use only the supplied calculated facts and user records. Do not silently recalculate, invent missing numbers, or claim access to bank/broker data. Explain assumptions clearly. For investment/insurance topics, provide educational decision factors rather than product recommendations. If facts are missing, say so. Keep answers practical and readable in markdown.\n\nCALCULATED FACTS:\n${facts}`;
     const userPrompt = mode === "review" ? "Review my financial picture and explain the main areas I should review next, using only these facts." : mode === "scenario" ? `${question}\nScenario facts: ${JSON.stringify(body.scenario || {})}` : question;
     const ai = await callProvider(system, userPrompt);
     const answer = ai || fallbackAnswer(question, f);

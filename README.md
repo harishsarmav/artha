@@ -1,19 +1,21 @@
-# Artha v0.6
+# Dhanive v0.7
 
-Artha is a personal finance workspace built around one core rule: **the Financial Engine calculates facts; AI explains them.**
+Dhanive is a personal finance workspace built around one core rule: **the Financial Engine calculates facts; AI explains them.**
 
-## Included in v0.6
+## Included in v0.7
 
 - Supabase email/password authentication and persistent profiles
 - PostgreSQL persistence for income, expenses, investments, loans, insurance, goals and transactions
 - Row Level Security so a signed-in user only sees their own rows
-- Automatic migration of the v0.5 localStorage prototype into the signed-in account when the database is empty
+- Optional, user-confirmed migration of v0.5 local browser data into the signed-in account
 - Deterministic cash-flow, savings rate, debt-service, emergency-fund, investment and goal calculations
 - Twelve-month run-rate projection (not a market prediction)
 - Scenario lab for extra monthly savings
 - Financial summaries stay in an unconfigured state until the user has entered relevant data; profile assumptions are not prefilled
 - Portfolio records are saved only when their forms are submitted; a changed scenario amount is stored locally in that browser
 - Transaction entry and AI/deterministic categorization
+- Month and year transaction views with recorded-spend trends, average active-month spending and a clearly labeled annualized run-rate
+- AI coach positioning built around deterministic calculations, connected life planning and explicit unknowns
 - AI coach, financial review and scenario explanation through one gateway contract
 - Local Ollama gateway for development
 - Supabase Edge Function gateway for production
@@ -27,7 +29,7 @@ Artha is a personal finance workspace built around one core rule: **the Financia
 3. Run `supabase/migrations/002_security_hardening.sql` to enable AI usage RLS and install the atomic server-enforced quota.
 4. Run `supabase/migrations/003_schema_alignment_and_rls.sql` to align legacy field names and rebuild owner-only policies. Back up first.
 5. Make sure Auth > URL Configuration includes your local URL (`http://localhost:3000`) and GitHub Pages URL (`https://harishsarmav.github.io/artha/`). For email confirmation, the GitHub Pages build uses `/artha/auth` as the callback path.
-6. Install dependencies with `npm install`, then run `npm audit`.
+6. Install the reviewed lockfile with `npm ci`, then run `npm audit --audit-level=high`.
 7. Start the app with `npm run dev`.
 8. For local AI, start Ollama and run `npm run ai` in another terminal. The dashboard uses `http://localhost:8787/api/coach` automatically while running on localhost.
 
@@ -71,10 +73,12 @@ The dashboard never adds loan EMI twice. Monthly outflow is living expenses + de
 - Public GitHub Pages configuration may contain only the Supabase project URL and publishable/anon key. Never expose a service-role key, database password, AI provider key, or private token in browser code or `NEXT_PUBLIC_*` variables.
 - Database tables use owner-scoped RLS. The `ai_usage` table is read-only to authenticated users; writes are permitted only through the authenticated quota RPC.
 - Production AI requests send the question and mode to the Edge Function. The Edge Function retrieves the signed-in user's own records under RLS; the browser does not send a second copy of the financial dataset.
+- Sign-in never uploads legacy browser data. When an empty account and older Artha records are detected, the dashboard explains the transfer and waits for the user's explicit confirmation. The original local copy is retained.
+- The AI Edge Function fetches only fields required for its calculations. It does not fetch transaction descriptions, profile names, or insurance provider names for AI analysis.
 - AI guidance sends calculated financial summaries to the configured AI provider. Goal names are anonymized before provider submission; login credentials and raw database rows are not sent. Do not configure an AI provider unless you accept that processing. Use deterministic mode by leaving the provider API key unset.
 - The public Supabase test page and unused Next.js API route have been removed.
 
 
 ## Supabase Free plan availability
 
-Supabase Free projects may pause after a period of inactivity. Artha does not run artificial keep-alive pings or background scripts. This is a Supabase plan limitation, not a frontend bug. For uninterrupted production availability, move the project to a paid Supabase plan; otherwise resume it from the Supabase dashboard when needed and keep independent backups.
+Supabase Free projects may pause after a period of inactivity. Dhanive does not run artificial keep-alive pings or background scripts. This is a Supabase plan limitation, not a frontend bug. For uninterrupted production availability, move the project to a paid Supabase plan; otherwise resume it from the Supabase dashboard when needed and keep independent backups.

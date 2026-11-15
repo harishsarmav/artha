@@ -5,6 +5,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 
+function isNetworkFailure(error: unknown) {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return error instanceof TypeError || /failed to fetch|networkerror|load failed/.test(message);
+}
+
 export default function AuthPage() {
   const router = useRouter();
   const [mode, setMode] = useState<"login" | "signup">("login");
@@ -19,9 +24,20 @@ export default function AuthPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) router.replace("/");
-    });
+    let active = true;
+    const redirectIfSignedIn = async () => {
+      try {
+        const { data, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) throw sessionError;
+        if (active && data.session) router.replace("/");
+      } catch (authError) {
+        if (active) setError(isNetworkFailure(authError)
+          ? "Can’t reach Supabase. Check your internet connection and that this app uses the active project URL, then try again."
+          : "Couldn’t check your sign-in session. Please try again.");
+      }
+    };
+    void redirectIfSignedIn();
+    return () => { active = false; };
   }, [router]);
 
   function switchMode(nextMode: "login" | "signup") {
@@ -52,8 +68,10 @@ export default function AuthPage() {
       const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       if (error) return setError("Email or password is incorrect. Please try again.");
       router.replace("/"); router.refresh();
-    } catch {
-      setError("Something went wrong. Please try again.");
+    } catch (authError) {
+      setError(isNetworkFailure(authError)
+        ? "Can’t reach Supabase. Check your internet connection and that this app uses the active project URL, then try again."
+        : "Something went wrong. Please try again.");
     } finally { setLoading(false); }
   }
 
@@ -61,7 +79,7 @@ export default function AuthPage() {
     <main className="authPage">
       <div className="authGlow authGlowA" /><div className="authGlow authGlowB" />
       <section className="authShell">
-        <div className="authBrand"><div className="authBrandMark">✦</div><div><div className="authBrandName">Artha Compass</div><div className="authBrandTag">Personal finance &amp; planning</div></div></div>
+        <div className="authBrand"><div className="authBrandMark">✦</div><div><div className="authBrandName">Dhanive</div><div className="authBrandTag">Personal finance &amp; planning</div></div></div>
         <div className="authCard">
           <div className="authHeader"><div className="authEyebrow">{mode === "login" ? "WELCOME BACK" : "GET STARTED"}</div><h1>{mode === "login" ? "Welcome back 👋" : "Take control of your money."}</h1><p>{mode === "login" ? "Sign in to continue your private financial workspace." : "Create your secure personal financial workspace."}</p></div>
           <form onSubmit={handleSubmit} className="authForm">
@@ -71,13 +89,13 @@ export default function AuthPage() {
             {mode === "signup" && <div className="authField"><label htmlFor="confirmPassword">Confirm password</label><div className="passwordField"><input id="confirmPassword" type={showConfirmPassword ? "text" : "password"} value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="Re-enter your password" autoComplete="new-password" minLength={8} required disabled={loading}/><button type="button" className="passwordToggle" onClick={()=>setShowConfirmPassword(v=>!v)}>{showConfirmPassword ? "Hide" : "Show"}</button></div></div>}
             {error && <div className="authMessage authError" role="alert"><span>!</span>{error}</div>}
             {message && <div className="authMessage authSuccess" role="status"><span>✓</span>{message}</div>}
-            <button type="submit" className="primary authSubmit" disabled={loading}>{loading ? "Please wait…" : mode === "login" ? "Sign in to Artha →" : "Create my Artha account →"}</button>
+            <button type="submit" className="primary authSubmit" disabled={loading}>{loading ? "Please wait…" : mode === "login" ? "Sign in to Dhanive →" : "Create my Dhanive account →"}</button>
           </form>
-          <div className="authFooter">{mode === "login" ? <>New to Artha? <button onClick={()=>switchMode("signup")} disabled={loading}>Create an account</button></> : <>Already have an account? <button onClick={()=>switchMode("login")} disabled={loading}>Sign in</button></>}</div>
+          <div className="authFooter">{mode === "login" ? <>New to Dhanive? <button onClick={()=>switchMode("signup")} disabled={loading}>Create an account</button></> : <>Already have an account? <button onClick={()=>switchMode("login")} disabled={loading}>Sign in</button></>}</div>
         </div>
         <div className="authTrust">🔐 Your financial data is stored in your Supabase account and protected by row-level access policies.</div>
-        <div className="authReleaseLink"><Link href="/release-notes/">Read Artha release notes <span aria-hidden="true">↗</span></Link></div>
-        <div className="authCopyright">Artha Compass · Personal finance &amp; planning · © 2026</div>
+        <div className="authReleaseLink"><Link href="/release-notes/">Read Dhanive release notes <span aria-hidden="true">↗</span></Link></div>
+        <div className="authCopyright">Dhanive · Personal finance &amp; planning · © 2026</div>
       </section>
     </main>
   );

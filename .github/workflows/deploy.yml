@@ -1,4 +1,4 @@
-name: Deploy Artha to GitHub Pages
+name: Deploy Dhanive to GitHub Pages
 
 on:
   push:

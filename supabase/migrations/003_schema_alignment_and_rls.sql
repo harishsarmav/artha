@@ -116,7 +116,8 @@ BEGIN
       ('expenses','description'), ('expenses','is_essential'),
       ('investments','contribution_type'),
       ('loans','description'), ('loans','outstanding_amount'), ('loans','emi_amount'), ('loans','remaining_months'),
-      ('insurance','coverage_amount'), ('insurance','premium_amount'), ('insurance','premium_frequency'),\n      ('goals','type')
+      ('insurance','coverage_amount'), ('insurance','premium_amount'), ('insurance','premium_frequency'),
+      ('goals','type')
     ) AS legacy(table_name, column_name)
   LOOP
     IF EXISTS (
@@ -227,3 +228,6 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.profiles, public.income, pu
   public.investments, public.loans, public.insurance, public.goals, public.transactions TO authenticated;
 REVOKE ALL ON TABLE public.ai_usage FROM authenticated;
 GRANT SELECT ON TABLE public.ai_usage TO authenticated;
+
+-- Refresh PostgREST's schema cache so the API can see renamed profile columns.
+NOTIFY pgrst, 'reload schema';

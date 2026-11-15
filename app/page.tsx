@@ -32,6 +32,7 @@ const investmentCategories = ["Equity", "Debt", "Hybrid", "Cash", "Gold", "Real 
 const loanTypes = ["Home Loan", "Car Loan", "Personal Loan", "Education Loan", "Credit Card", "Two-wheeler Loan", "Other"];
 const insuranceTypes = ["Life / Term", "Health", "Personal Accident", "Other"];
 const goalTypes = ["Emergency fund", "Marriage", "Home", "Education", "Vehicle", "Retirement", "Travel", "Other"];
+const planningBackgrounds = ["home.webp", "car.webp", "goals.webp", "debt.webp", "safety.webp", "retirement.webp"];
 function getAiTarget() {
   if (typeof window !== "undefined" && window.location.hostname === "localhost") {
     return "http://localhost:8787/api/coach";
@@ -42,11 +43,34 @@ function getAiTarget() {
 function normalizeProfile(row: any, fallbackName = "") : Profile {
   return { id: row?.user_id ?? row?.id ?? "", name: String(row?.full_name || row?.name || fallbackName || "").trim(), age: numberValue(row?.age), dependents: numberValue(row?.dependents), country: row?.country ?? "", riskProfile: row?.risk_profile ?? row?.riskProfile ?? "", investmentHorizon: row?.investment_horizon ?? row?.investmentHorizon ?? "", primaryGoal: row?.primary_goal ?? row?.primaryGoal ?? "", lifeCover: numberValue(row?.life_cover ?? row?.lifeCover), healthCover: numberValue(row?.health_cover ?? row?.healthCover), cashSavings: numberValue(row?.cash_savings ?? row?.cashSavings) };
 }
+function profileSaveErrorMessage(error: unknown) {
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code || "")
+    : "";
+  if (code === "42501") return "Profile not saved (42501): Supabase row security denied the write. Check that signed-in users can update only their own profile row.";
+  if (code === "PGRST204" || code === "PGRST205") return `Profile not saved (${code}): Supabase's API schema is missing a profile field or table. Refresh its schema cache and check that the app uses the updated project.`;
+  if (code === "23505") return "Profile not saved (23505): The profile row already exists but could not be updated. Refresh the app and try again.";
+  return code
+    ? `Profile not saved (${code}). Check the Supabase profile schema and access policies, then try again.`
+    : "Profile not saved. Check your connection and Supabase profile access, then try again.";
+}
+function recordSaveErrorMessage(error: unknown, record: string) {
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code || "")
+    : "";
+  if (code === "42501") return `${record} was not saved: your account does not have permission to write this record. Check the Supabase owner policies. (42501)`;
+  if (code === "PGRST204" || code === "PGRST205") return `${record} was not saved: Supabase is missing a required table or column. Apply the current schema migrations and refresh the API schema cache. (${code})`;
+  if (code === "23502" || code === "23503" || code === "23505" || code === "23514") return `${record} was not saved because the submitted fields do not match a database requirement. Review the fields and schema. (${code})`;
+  if (code) return `${record} was not saved. Check your connection and Supabase schema, then try again. (${code})`;
+  return `${record} was not saved. Check your connection and sign-in, then try again.`;
+}
 function mapRows<T extends Record<string, any>>(rows: T[] | null) { return (rows ?? []).map((row) => ({ ...row })); }
+function todayLocalDate() { const date = new Date(); date.setMinutes(date.getMinutes() - date.getTimezoneOffset()); return date.toISOString().slice(0, 10); }
 
 export default function Home() {
   const router = useRouter();
   const [sessionReady, setSessionReady] = useState(false);
+  const [authConnectionError, setAuthConnectionError] = useState(false);
   const [loadingData, setLoadingData] = useState(true);
   const [saveBusy, setSaveBusy] = useState(false);
   const [error, setError] = useState("");
@@ -60,13 +84,29 @@ export default function Home() {
   const [securityConfirm, setSecurityConfirm] = useState("");
   const [profile, setProfile] = useState<Profile>({ id: "", ...profileDefaults });
   const [authEmail, setAuthEmail] = useState("");
+  const [legacyDataAvailable, setLegacyDataAvailable] = useState(false);
+  const [legacyImportBusy, setLegacyImportBusy] = useState(false);
   const [income, setIncome] = useState<Income[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [showAllIncome, setShowAllIncome] = useState(false);
+  const [showAllExpenses, setShowAllExpenses] = useState(false);
+  const [showAllInvestments, setShowAllInvestments] = useState(false);
+  const [showAllLoans, setShowAllLoans] = useState(false);
+  const [showAllGoals, setShowAllGoals] = useState(false);
+  const [showAllInsurance, setShowAllInsurance] = useState(false);
+  const [portfolioTab, setPortfolioTab] = useState<"income" | "expenses" | "investments" | "loans" | "insurance" | "goals">("income");
   const [investments, setInvestments] = useState<Investment[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
   const [insurance, setInsurance] = useState<Insurance[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [spendingYear, setSpendingYear] = useState(new Date().getFullYear());
+  const [spendingMonth, setSpendingMonth] = useState("all");
+  const [yearTransactions, setYearTransactions] = useState<Transaction[]>([]);
+  const [yearTransactionsLoading, setYearTransactionsLoading] = useState(false);
+  const [yearTransactionsError, setYearTransactionsError] = useState("");
+  const [yearTransactionsTruncated, setYearTransactionsTruncated] = useState(false);
+  const [yearTransactionsReload, setYearTransactionsReload] = useState(0);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
@@ -118,101 +158,13 @@ export default function Home() {
     if (firstError) throw firstError;
 
     const rowsEmpty = [incomeRes.data, expenseRes.data, investmentRes.data, loanRes.data, insuranceRes.data, goalRes.data, txRes.data].every((v) => !v?.length);
-    const localProfile = typeof window !== "undefined" ? localStorage.getItem("artha-profile") : null;
-    const hasLegacy = typeof window !== "undefined" && ["artha-income", "artha-expenses", "artha-investments", "artha-loans", "artha-goals"].some((key) => !!localStorage.getItem(key));
-
-    if (rowsEmpty && (localProfile || hasLegacy)) {
-      try {
-        const local = (key: string) => { try { return JSON.parse(localStorage.getItem(key) || "null"); } catch { return null; } };
-        const p = local("artha-profile");
-        const nextProfile = { id: userId, ...profileDefaults, ...p, name: p?.name || userName };
-        const legacyProfilePayload = {
-          name: nextProfile.name,
-          age: numberValue(nextProfile.age),
-          dependents: numberValue(nextProfile.dependents),
-          country: nextProfile.country || "India",
-          risk_profile: nextProfile.risk || nextProfile.riskProfile || "Moderate",
-          investment_horizon: nextProfile.horizon || nextProfile.investmentHorizon || "5+ years",
-          primary_goal: nextProfile.goal || nextProfile.primaryGoal || "Build wealth",
-          life_cover: numberValue(nextProfile.lifeCover),
-          health_cover: numberValue(nextProfile.healthCover),
-          cash_savings: numberValue(nextProfile.cashSavings),
-        };
-        const legacyProfileExisting = await supabase.from("profiles").select("id").eq("id", userId).maybeSingle();
-        if (legacyProfileExisting.error) throw legacyProfileExisting.error;
-        if (legacyProfileExisting.data) {
-          const legacyProfileUpdate = await supabase.from("profiles").update(legacyProfilePayload).eq("id", userId);
-          if (legacyProfileUpdate.error) throw legacyProfileUpdate.error;
-        } else {
-          const legacyProfileInsert = await supabase.from("profiles").insert({ ...legacyProfilePayload, id: userId });
-          if (legacyProfileInsert.error) throw legacyProfileInsert.error;
-        }
-        for (const row of local("artha-income") || []) {
-          const result = await supabase.from("income").insert({
-            user_id: userId,
-            name: row.name || "Income",
-            type: row.type || "Other",
-            amount: numberValue(row.amount),
-            frequency: String(row.frequency || "Monthly"),
-          });
-          if (result.error) throw result.error;
-        }
-        for (const row of local("artha-expenses") || []) {
-          const result = await supabase.from("expenses").insert({
-            user_id: userId,
-            name: row.name || "Expense",
-            category: row.category || "Other",
-            amount: numberValue(row.amount),
-            frequency: String(row.frequency || "Monthly"),
-          });
-          if (result.error) throw result.error;
-        }
-        for (const row of local("artha-investments") || []) {
-          const result = await supabase.from("investments").insert({
-            user_id: userId,
-            name: row.name || "Investment",
-            type: row.type || "Other",
-            category: row.category || "Other",
-            mode: row.mode || "Lump sum",
-            monthly_amount: numberValue(row.monthlyAmount),
-            invested_amount: numberValue(row.investedAmount),
-            current_value: numberValue(row.currentValue),
-            start_date: row.startDate || null,
-          });
-          if (result.error) throw result.error;
-        }
-        for (const row of local("artha-loans") || []) {
-          const result = await supabase.from("loans").insert({
-            user_id: userId,
-            type: row.type || "Other",
-            name: row.name || "Loan",
-            original_amount: numberValue(row.originalAmount),
-            outstanding: numberValue(row.outstanding),
-            emi: numberValue(row.emi),
-            interest_rate: numberValue(row.interestRate),
-            tenure_months: numberValue(row.tenureMonths),
-          });
-          if (result.error) throw result.error;
-        }
-        for (const row of local("artha-goals") || []) {
-          if (!row.targetDate) continue;
-          const result = await supabase.from("goals").insert({
-            user_id: userId,
-            name: row.name || "Goal",
-            target_amount: numberValue(row.targetAmount),
-            current_amount: numberValue(row.currentAmount),
-            target_date: row.targetDate,
-          });
-          if (result.error) throw result.error;
-        }
-        ["artha-profile", "artha-income", "artha-expenses", "artha-investments", "artha-loans", "artha-goals"].forEach((key) => localStorage.removeItem(key));
-        showToast("Your previous Artha data was moved into your account.");
-        return loadAll(userId, userName);
-      } catch {
-        // Keep raw migration/database errors out of the browser console.
-        setError("Some older local data could not be migrated. Your original browser data has been kept.");
-      }
-    }
+    const legacyKeys = ["artha-profile", "artha-income", "artha-expenses", "artha-investments", "artha-loans", "artha-goals"];
+    const hasLegacy = typeof window !== "undefined" && legacyKeys.some((key) => {
+      try { return window.localStorage.getItem(key) !== null; } catch { return false; }
+    });
+    // Legacy browser data is never transferred during sign-in. Offer an explicit,
+    // user-initiated import only when the account has no portfolio records.
+    setLegacyDataAvailable(rowsEmpty && hasLegacy);
 
     setProfile(profileRes.data ? normalizeProfile(profileRes.data, userName) : { id: userId, ...profileDefaults, name: userName });
     setIncome(mapRows(incomeRes.data).map((r: any) => ({
@@ -278,22 +230,130 @@ export default function Home() {
     setLoadingData(false);
   }, []);
 
+  async function importLegacyData() {
+    if (!legacyDataAvailable || !profile.id || legacyImportBusy) return;
+    const approved = window.confirm("Import older Artha data? This copies profile and portfolio records from this browser into your signed-in Dhanive Supabase account. Nothing is transferred unless you choose OK. The browser copy will be kept.");
+    if (!approved) return;
+    const read = (key: string) => { try { return JSON.parse(window.localStorage.getItem(key) || "null"); } catch { return null; } };
+    const list = (key: string) => { const value = read(key); return Array.isArray(value) ? value.filter((row) => row && typeof row === "object") : []; };
+    const oldProfile = read("artha-profile");
+    const oldIncome = list("artha-income");
+    const oldExpenses = list("artha-expenses");
+    const oldInvestments = list("artha-investments");
+    const oldLoans = list("artha-loans");
+    const oldGoals = list("artha-goals");
+    setLegacyImportBusy(true); setError("");
+    try {
+      if (oldProfile && typeof oldProfile === "object") {
+        const payload = {
+          id: profile.id, name: String(profile.name || oldProfile.name || "").slice(0, 120),
+          age: profile.age || numberValue(oldProfile.age), dependents: profile.dependents || numberValue(oldProfile.dependents),
+          country: String(profile.country || oldProfile.country || "").slice(0, 100),
+          risk_profile: String(profile.riskProfile || oldProfile.risk || oldProfile.riskProfile || "").slice(0, 80),
+          investment_horizon: String(profile.investmentHorizon || oldProfile.horizon || oldProfile.investmentHorizon || "").slice(0, 80),
+          primary_goal: String(profile.primaryGoal || oldProfile.goal || oldProfile.primaryGoal || "").slice(0, 120),
+          life_cover: profile.lifeCover || numberValue(oldProfile.lifeCover), health_cover: profile.healthCover || numberValue(oldProfile.healthCover), cash_savings: profile.cashSavings || numberValue(oldProfile.cashSavings),
+        };
+        const { error: profileError } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
+        if (profileError) throw profileError;
+      }
+      const imports = [
+        ["income", oldIncome.map((r) => ({ user_id: profile.id, name: String(r.name || "Income").slice(0, 120), type: String(r.type || "Other").slice(0, 80), amount: numberValue(r.amount), frequency: String(r.frequency || "Monthly").slice(0, 40) }))],
+        ["expenses", oldExpenses.map((r) => ({ user_id: profile.id, name: String(r.name || "Expense").slice(0, 120), category: String(r.category || "Other").slice(0, 80), amount: numberValue(r.amount), frequency: String(r.frequency || "Monthly").slice(0, 40) }))],
+        ["investments", oldInvestments.map((r) => ({ user_id: profile.id, name: String(r.name || "Investment").slice(0, 120), type: String(r.type || "Other").slice(0, 80), category: String(r.category || "Other").slice(0, 80), mode: String(r.mode || "Lump sum").slice(0, 40), monthly_amount: numberValue(r.monthlyAmount), invested_amount: numberValue(r.investedAmount), current_value: numberValue(r.currentValue), start_date: r.startDate || null }))],
+        ["loans", oldLoans.map((r) => ({ user_id: profile.id, type: String(r.type || "Other").slice(0, 80), name: String(r.name || "Loan").slice(0, 120), original_amount: numberValue(r.originalAmount), outstanding: numberValue(r.outstanding), emi: numberValue(r.emi), interest_rate: numberValue(r.interestRate), tenure_months: numberValue(r.tenureMonths) }))],
+        ["goals", oldGoals.filter((r) => r.targetDate).map((r) => ({ user_id: profile.id, name: String(r.name || "Goal").slice(0, 120), target_amount: numberValue(r.targetAmount), current_amount: numberValue(r.currentAmount), target_date: r.targetDate }))],
+      ] as const;
+      for (const [table, rows] of imports) {
+        if (!rows.length) continue;
+        const { error: insertError } = await supabase.from(table).insert(rows as any);
+        if (insertError) throw insertError;
+      }
+      setLegacyDataAvailable(false);
+      showToast("Older data was copied to your account. The browser copy remains here.");
+      await loadAll(profile.id, profile.name);
+    } catch {
+      setLegacyDataAvailable(false);
+      setError("The import did not finish. Some records may have reached your account; check your portfolio before trying again. Your browser copy was kept.");
+    } finally { setLegacyImportBusy(false); }
+  }
+
   useEffect(() => {
     let mounted = true;
     const bootstrap = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (!mounted) return;
-      if (!data.session) { router.replace("/auth"); return; }
-      setSessionReady(true);
-      setAuthEmail(data.session.user.email || "");
-      const name = data.session.user.user_metadata?.full_name || data.session.user.email?.split("@")[0] || "there";
-      try { await loadAll(data.session.user.id, name); }
-      catch { setError("Unable to load your financial data. Please check your connection and try again."); setLoadingData(false); }
+      try {
+        const { data, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) throw sessionError;
+        if (!mounted) return;
+        if (!data.session) { router.replace("/auth"); return; }
+        setSessionReady(true);
+        setAuthEmail(data.session.user.email || "");
+        const name = data.session.user.user_metadata?.full_name || data.session.user.email?.split("@")[0] || "there";
+        try { await loadAll(data.session.user.id, name); }
+        catch { setError("Unable to load your financial data. Please check your connection and try again."); setLoadingData(false); }
+      } catch {
+        if (!mounted) return;
+        setAuthConnectionError(true);
+        setSessionReady(true);
+        setLoadingData(false);
+      }
     };
     bootstrap();
     const { data: listener } = supabase.auth.onAuthStateChange((event) => { if (event === "SIGNED_OUT") router.replace("/auth"); });
     return () => { mounted = false; listener.subscription.unsubscribe(); };
   }, [loadAll, router]);
+
+  useEffect(() => {
+    if (!profile.id) return;
+    let active = true;
+    const loadYearTransactions = async () => {
+      setYearTransactionsLoading(true);
+      setYearTransactionsError("");
+      setYearTransactionsTruncated(false);
+      const startDate = `${spendingYear}-01-01`;
+      const endDate = `${spendingYear + 1}-01-01`;
+      const pageSize = 1000;
+      const maxRows = 5000;
+      const rows: any[] = [];
+      try {
+        for (let offset = 0; offset <= maxRows; offset += pageSize) {
+          const { data, error: queryError } = await supabase
+            .from("transactions")
+            .select("id,transaction_date,description,amount,transaction_type,category,source")
+            .eq("user_id", profile.id)
+            .gte("transaction_date", startDate)
+            .lt("transaction_date", endDate)
+            .order("transaction_date", { ascending: false })
+            .range(offset, offset + pageSize - 1);
+          if (queryError) throw queryError;
+          rows.push(...(data ?? []));
+          if ((data?.length ?? 0) < pageSize) break;
+          if (offset >= maxRows) break;
+        }
+        if (!active) return;
+        const truncated = rows.length > maxRows;
+        setYearTransactionsTruncated(truncated);
+        setYearTransactions(rows.slice(0, maxRows).map((row) => ({
+          id: row.id,
+          transactionDate: row.transaction_date,
+          description: row.description,
+          amount: numberValue(row.amount),
+          transactionType: row.transaction_type || "Expense",
+          category: row.category || "Other",
+          source: row.source || "",
+        })));
+      } catch {
+        if (active) {
+          setYearTransactions([]);
+          setYearTransactionsError("Could not load this year's transaction history. Please try again.");
+        }
+      } finally {
+        if (active) setYearTransactionsLoading(false);
+      }
+    };
+    void loadYearTransactions();
+    return () => { active = false; };
+  }, [profile.id, spendingYear, yearTransactionsReload]);
 
   const financials = useMemo(() => calculateFinancials({
     profile: { name: profile.name, age: profile.age, dependents: profile.dependents, riskProfile: profile.riskProfile, investmentHorizon: profile.investmentHorizon, primaryGoal: profile.primaryGoal, lifeCover: profile.lifeCover, healthCover: profile.healthCover, cashSavings: profile.cashSavings },
@@ -316,13 +376,41 @@ export default function Home() {
     return [...map.entries()].sort((a,b)=>b[1]-a[1]);
   }, [expenses]);
 
+  const monthlyTransactionSummary = useMemo(() => {
+    const months = Array.from({ length: 12 }, (_, month) => ({ month, expenses: 0, income: 0, count: 0 }));
+    for (const item of yearTransactions) {
+      const month = Number(item.transactionDate.slice(5, 7)) - 1;
+      if (month < 0 || month > 11) continue;
+      const amount = Math.max(0, numberValue(item.amount));
+      if (/income|credit/i.test(item.transactionType)) months[month].income += amount;
+      else months[month].expenses += amount;
+      months[month].count += 1;
+    }
+    return months;
+  }, [yearTransactions]);
+
+  const filteredYearTransactions = useMemo(() => spendingMonth === "all"
+    ? yearTransactions
+    : yearTransactions.filter((item) => Number(item.transactionDate.slice(5, 7)) === Number(spendingMonth) + 1),
+  [yearTransactions, spendingMonth]);
+  const visibleYearTransactions = filteredYearTransactions.slice(0, 30);
+  const selectedPeriodSpending = spendingMonth === "all"
+    ? monthlyTransactionSummary.reduce((total, item) => total + item.expenses, 0)
+    : monthlyTransactionSummary[Number(spendingMonth)]?.expenses ?? 0;
+  const yearSpending = monthlyTransactionSummary.reduce((total, item) => total + item.expenses, 0);
+  const monthsWithRecordedSpending = monthlyTransactionSummary.filter((item) => item.expenses > 0).length;
+  const averageRecordedMonth = monthsWithRecordedSpending ? yearSpending / monthsWithRecordedSpending : 0;
+  const annualizedSpending = monthsWithRecordedSpending >= 3 ? averageRecordedMonth * 12 : null;
+  const peakSpendingMonth = monthlyTransactionSummary.reduce((peak, item) => item.expenses > peak.expenses ? item : peak, { month: 0, expenses: 0, income: 0, count: 0 });
+
   const scenario = useMemo(() => {
     const extra = Math.max(0, scenarioExtra);
     const nextFreeCashFlow = financials.freeCashFlow + extra;
     const currentEmergency = financials.cashSavings;
     const nextEmergencyMonths = financials.essentialMonthlyExpenses > 0 ? (currentEmergency + extra * 12) / financials.essentialMonthlyExpenses : 0;
-    const fundedGoals = financials.goals.filter((g) => g.requiredMonthlyContribution > 0 && g.requiredMonthlyContribution <= nextFreeCashFlow).length;
-    return { nextFreeCashFlow, nextEmergencyMonths, fundedGoals };
+    const goalContributionNeed = financials.goals.reduce((total, goal) => total + goal.requiredMonthlyContribution, 0);
+    const cashAfterGoals = nextFreeCashFlow - goalContributionNeed;
+    return { nextFreeCashFlow, nextEmergencyMonths, goalContributionNeed, cashAfterGoals, investmentContributions: financials.investmentContributions };
   }, [financials, scenarioExtra]);
 
   const aiContext = useMemo(() => ({
@@ -350,7 +438,7 @@ export default function Home() {
   function localFallbackAnswer(nextQuestion: string, mode: "chat" | "review" | "scenario") {
     const f = financials;
     const q = nextQuestion.toLowerCase();
-    const lines = ["### Artha's engine-based view", ""];
+    const lines = ["### Dhanive's engine-based view", ""];
 
     if (f.monthlyIncome > 0) {
       lines.push(
@@ -414,7 +502,7 @@ export default function Home() {
       );
     }
 
-    lines.push("", "This fallback uses Artha's deterministic engine facts only; no AI inference was used.");
+    lines.push("", "This fallback uses Dhanive's deterministic engine facts only; no AI inference was used.");
     return lines.join("\n");
   }
 
@@ -439,7 +527,7 @@ export default function Home() {
     else if (type === "loan") setForm(item ? { name:item.name, type:item.type, originalAmount:item.originalAmount, outstanding:item.outstanding, emi:item.emi, interestRate:item.interestRate, tenureMonths:item.tenureMonths } : { name:"", type:"Car Loan", originalAmount:"", outstanding:"", emi:"", interestRate:"", tenureMonths:"" });
     else if (type === "insurance") setForm(item ? { type:item.type, provider:item.provider, coverage:item.coverage, premium:item.premium, frequency:item.frequency, renewalDate:item.renewalDate || "" } : { type:"Life / Term", provider:"", coverage:"", premium:"", frequency:"Yearly", renewalDate:"" });
     else if (type === "goal") setForm(item ? { type:item.type || "Other", name:item.name, targetAmount:item.targetAmount, currentAmount:item.currentAmount, targetDate:item.targetDate } : { type:"Other", name:"", targetAmount:"", currentAmount:"", targetDate:"" });
-    else if (type === "transaction") setForm(item ? { transactionDate:item.transactionDate, description:item.description, amount:item.amount, transactionType:item.transactionType, category:item.category, source:item.source } : { transactionDate:new Date().toISOString().slice(0,10), description:"", amount:"", transactionType:"Expense", category:"", source:"Manual" });
+    else if (type === "transaction") setForm(item ? { transactionDate:item.transactionDate, description:item.description, amount:item.amount, transactionType:item.transactionType, category:item.category, source:item.source } : { transactionDate:todayLocalDate(), description:"", amount:"", transactionType:"Expense", category:"", source:"Manual" });
   }
 
   async function saveModal() {
@@ -472,32 +560,17 @@ export default function Home() {
           cash_savings: numberValue(form.cashSavings),
         };
 
-        // The auth trigger normally creates this row at signup. Update it directly
-        // first so profile saving only needs the profile UPDATE/SELECT RLS policies.
-        const updated = await supabase
+        // Upsert handles both existing profiles and accounts created before the
+        // profile trigger existed. RLS must allow only the signed-in user's row.
+        const saved = await supabase
           .from("profiles")
-          .update(payload)
-          .eq("id", userId)
+          .upsert({ ...payload, id: userId }, { onConflict: "id" })
           .select("*")
-          .maybeSingle();
+          .single();
 
-        if (updated.error) throw updated.error;
+        if (saved.error) throw saved.error;
 
-        let savedProfile = updated.data;
-
-        // Fallback for older accounts created before the profile trigger existed.
-        if (!savedProfile) {
-          const inserted = await supabase
-            .from("profiles")
-            .insert({ ...payload, id: userId })
-            .select("*")
-            .single();
-
-          if (inserted.error) throw inserted.error;
-          savedProfile = inserted.data;
-        }
-
-        setProfile(normalizeProfile(savedProfile, payload.name));
+        setProfile(normalizeProfile(saved.data, payload.name));
         closeModal();
         showToast("Profile saved successfully.");
         return;
@@ -721,7 +794,7 @@ export default function Home() {
 
       if (modal === "transaction") {
         const payload = {
-          transaction_date: String(form.transactionDate || new Date().toISOString().slice(0, 10)),
+          transaction_date: String(form.transactionDate || todayLocalDate()),
           description: String(form.description || "Transaction"),
           amount: numberValue(form.amount),
           transaction_type: String(form.transactionType || "Expense"),
@@ -735,6 +808,7 @@ export default function Home() {
 
         if (res.error) throw res.error;
 
+        if (!res.data) throw new Error("Transaction was saved but the database did not confirm it.");
         const row = res.data;
         const item: Transaction = {
           id: row.id,
@@ -747,13 +821,15 @@ export default function Home() {
         };
 
         setTransactions((items) => edit ? items.map((v) => v.id === edit.id ? item : v) : [item, ...items]);
+        setYearTransactionsReload((value) => value + 1);
         closeModal();
         showToast("Transaction saved.");
         return;
       }
-    } catch {
-      // Keep database diagnostics and raw server responses out of the browser UI.
-      setError("Unable to save changes. Please check your connection and try again.");
+    } catch (err) {
+      // Surface only the stable database error code for profile diagnosis; never
+      // render raw server details that could contain user supplied values.
+      setError(modal === "profile" ? profileSaveErrorMessage(err) : recordSaveErrorMessage(err, modal === "income" ? "Income" : modal === "expense" ? "Expense" : modal === "investment" ? "Investment" : modal === "loan" ? "Loan" : modal === "insurance" ? "Insurance" : modal === "goal" ? "Goal" : "Transaction"));
     } finally {
       setSaveBusy(false);
     }
@@ -768,7 +844,7 @@ export default function Home() {
   }
 
   async function removeRow(table: string, id: string) {
-    if (!window.confirm("Delete this item from your Artha account?")) return;
+    if (!window.confirm("Delete this item from your Dhanive account?")) return;
     const { error } = await supabase.from(table).delete().eq("id", id).eq("user_id", profile.id);
     if (error) { setError("Unable to delete this item. Please try again."); return; }
     if (table === "income") setIncome(v=>v.filter(x=>x.id!==id));
@@ -785,10 +861,11 @@ export default function Home() {
     }
     if (table === "goals") setGoals(v=>v.filter(x=>x.id!==id));
     if (table === "transactions") setTransactions(v=>v.filter(x=>x.id!==id));
+    if (table === "transactions") setYearTransactions(v=>v.filter(x=>x.id!==id));
     showToast("Deleted.");
   }
 
-  async function askArtha(
+  async function askDhanive(
     nextQuestion = question,
     mode: "chat" | "review" | "scenario" = "chat",
     scenarioPayload: any = undefined
@@ -902,7 +979,7 @@ export default function Home() {
 
       if (!target) {
         setField("category", localCategory);
-        showToast(`Artha categorized this as ${localCategory}.`);
+        showToast(`Dhanive categorized this as ${localCategory}.`);
         return;
       }
 
@@ -942,11 +1019,11 @@ export default function Home() {
 
       const category = data.category || localCategory;
       setField("category", category);
-      showToast(`Artha categorized this as ${category}.`);
+      showToast(`Dhanive categorized this as ${category}.`);
     } catch (err) {
       if (typeof window !== "undefined" && window.location.hostname === "localhost") {
         setField("category", localCategory);
-        showToast(`Artha categorized this as ${localCategory}.`);
+        showToast(`Dhanive categorized this as ${localCategory}.`);
       } else {
         setError(err instanceof Error ? err.message : "Unable to categorize.");
       }
@@ -969,13 +1046,16 @@ export default function Home() {
     closeModal(); showToast("Password updated.");
   }
 
-  if (!sessionReady || loadingData) return <div className="loading"><div><div className="loadingMark">✦</div><strong>Loading your Artha workspace…</strong></div></div>;
+  if (!sessionReady || loadingData) return <div className="loading"><div><div className="loadingMark">✦</div><strong>Loading your Dhanive workspace…</strong></div></div>;
+  if (authConnectionError) return <main className="loading"><div role="alert"><div className="loadingMark">!</div><strong>Can&apos;t reach Supabase</strong><p>Check your internet connection and that this app uses the active Supabase project URL, then retry.</p><button className="primary" type="button" onClick={() => window.location.reload()}>Retry connection</button></div></main>;
 
   return (
     <main className="shell">
-      <header className="appHeader"><div className="headerInner"><div className="brandWrap"><div className="brandSymbol" aria-hidden="true">✦</div><div><div className="brand">Artha Compass</div><div className="tag">Personal finance &amp; planning</div></div></div><div className="headerActions"><button className="themeToggle" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}><span aria-hidden="true">{theme === "dark" ? "☼" : "☾"}</span><span className="themeToggleLabel">{theme === "dark" ? "Light" : "Dark"}</span></button><div className="secureBadge"><span>●</span> Secure</div><div className="profileArea"><button className="profileButton" onClick={()=>setProfileMenu(v=>!v)} aria-expanded={profileMenu}><span className="profileAvatar">{(profile.name||"A").charAt(0).toUpperCase()}</span><span className="profileButtonText">{profile.name || "Profile"}</span><span className="profileChevron">{profileMenu?"⌃":"⌄"}</span></button>{profileMenu && <div className="profileMenu"><button className="profileMenuUser profileMenuUserButton" onClick={()=>{setProfileMenu(false);openModal("profile");}}><span className="profileMenuAvatar">{(profile.name||"A").charAt(0).toUpperCase()}</span><span><strong>{profile.name||"Your profile"}</strong><small>Personal account</small></span></button><div className="profileMenuDivider"/><button className="profileMenuItem" onClick={()=>{setProfileMenu(false);openModal("profile");}}>👤 <span>Profile settings</span></button><button className="profileMenuItem" onClick={()=>{setProfileMenu(false);openModal("security");}}>🔐 <span>Account & security</span></button><button className="profileMenuItem signOut" onClick={handleSignOut}>↪ <span>Sign out</span></button></div>}</div></div></div></header>
+      <header className="appHeader"><div className="headerInner"><div className="brandWrap"><div className="brandSymbol" aria-hidden="true">✦</div><div><div className="brand">Dhanive</div><div className="tag">Personal finance &amp; planning</div></div></div><div className="headerActions"><button className="themeToggle" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}><span aria-hidden="true">{theme === "dark" ? "☼" : "☾"}</span><span className="themeToggleLabel">{theme === "dark" ? "Light" : "Dark"}</span></button><div className="secureBadge"><span>●</span> Secure</div><div className="profileArea"><button className="profileButton" onClick={()=>setProfileMenu(v=>!v)} aria-expanded={profileMenu}><span className="profileAvatar">{(profile.name||"A").charAt(0).toUpperCase()}</span><span className="profileButtonText">{profile.name || "Profile"}</span><span className="profileChevron">{profileMenu?"⌃":"⌄"}</span></button>{profileMenu && <div className="profileMenu"><button className="profileMenuUser profileMenuUserButton" onClick={()=>{setProfileMenu(false);openModal("profile");}}><span className="profileMenuAvatar">{(profile.name||"A").charAt(0).toUpperCase()}</span><span><strong>{profile.name||"Your profile"}</strong><small>Personal account</small></span></button><div className="profileMenuDivider"/><button className="profileMenuItem" onClick={()=>{setProfileMenu(false);openModal("profile");}}>👤 <span>Profile settings</span></button><button className="profileMenuItem" onClick={()=>{setProfileMenu(false);openModal("security");}}>🔐 <span>Account & security</span></button><button className="profileMenuItem signOut" onClick={handleSignOut}>↪ <span>Sign out</span></button></div>}</div></div></div></header>
 
-      <section className="hero" id="overview"><div><div className="eyebrow">YOUR MONEY, ONE PLACE</div><h1>Hi {profile.name || "there"} 👋<br/>Let&apos;s understand your money.</h1><p>Track cash flow, investments, loans, protection and goals. Artha Compass keeps the calculations deterministic and uses AI to explain what the numbers mean.</p></div><div className="heroActions"><button className="primary" onClick={()=>openModal("transaction")}>＋ Add transaction</button><button className="secondary" onClick={()=>openModal("profile")}>Edit profile</button></div></section>
+      <section className="hero" id="overview"><div><div className="eyebrow">YOUR MONEY, ONE PLACE</div><h1>Hi {profile.name || "there"} 👋<br/>Let&apos;s understand your money.</h1><p>Track cash flow, investments, loans, protection and goals. Dhanive keeps the calculations deterministic and uses AI to explain what the numbers mean.</p></div><div className="heroActions"><button className="primary" onClick={()=>openModal("transaction")}>＋ Add transaction</button><button className="secondary" onClick={()=>openModal("profile")}>Edit profile</button></div></section>
+
+      {legacyDataAvailable && <section className="card" role="status" style={{ marginTop: 20, padding: 20 }}><div className="eyebrow">OLDER BROWSER DATA</div><h2>We found data from an earlier Artha version</h2><p>It remains in this browser and has not been uploaded. You can leave it here, or explicitly copy profile and portfolio records into this signed-in account. The local copy will be kept.</p><button className="primary" type="button" onClick={importLegacyData} disabled={legacyImportBusy}>{legacyImportBusy ? "Importing…" : "Review and import older data"}</button></section>}
 
       <nav className="sectionNav" aria-label="Main sections">
         <a href="#overview">Overview</a>
@@ -990,7 +1070,7 @@ export default function Home() {
           <div>
             <div className="eyebrow">PLAN YOUR NEXT MOVE</div>
             <h2>Make your next big decision with confidence.</h2>
-            <p>Choose a life goal and Artha will use your financial picture to help you explore the trade-offs.</p>
+            <p>Choose a life goal and Dhanive will use your financial picture to help you explore the trade-offs.</p>
           </div>
           <span className="planningBadge">Portfolio-aware guidance</span>
         </div>
@@ -1000,19 +1080,20 @@ export default function Home() {
             ["▣", "Car planning", "Compare purchase price, EMI and total ownership cost.", "Help me plan a car purchase. Evaluate on-road price, down payment, loan EMI, fuel, insurance, maintenance and total ownership cost. Check the impact on my savings, emergency fund and other goals. Ask for missing information."],
             ["◎", "Goal planning", "Turn a target amount and timeline into a savings plan.", "Help me create a goal-based savings plan. Review my existing goals and portfolio, calculate the monthly contribution needed for a target and timeline, and explain assumptions and trade-offs. Ask me for missing information."],
             ["⇄", "Debt planning", "Prioritise repayments and compare prepayment scenarios.", "Review my debts and help me build a repayment strategy. Compare avalanche and snowball approaches, EMI changes and prepayment scenarios using my actual loan data. Explain any assumptions and ask for missing information."],
-            ["◇", "Financial safety", "Review emergency savings, insurance and cash-flow resilience.", "Run a financial safety review using my Artha data. Assess emergency fund coverage, debt exposure, insurance information and cash-flow resilience. Identify missing information and prioritise practical next steps."],
+            ["◇", "Financial safety", "Review emergency savings, insurance and cash-flow resilience.", "Run a financial safety review using my Dhanive data. Assess emergency fund coverage, debt exposure, insurance information and cash-flow resilience. Identify missing information and prioritise practical next steps."],
             ["↗", "Retirement planning", "Estimate your future needs and long-term savings gap.", "Help me plan for retirement. Estimate inflation-adjusted future expenses and the savings gap using my age, existing investments and goals where available. Clearly label assumptions and ask for missing information."]
-          ].map(([icon, title, description, prompt]) => (
+          ].map(([icon, title, description, prompt], index) => (
             <button className="planningCard" key={title} onClick={() => {
               setQuestion(prompt);
               setAnswer("");
               setError("");
               document.getElementById("ai-coach")?.scrollIntoView({ behavior: "smooth", block: "start" });
             }}>
+              <span className="planningArt" aria-hidden="true" style={{ backgroundImage: `url("${process.env.NEXT_PUBLIC_BASE_PATH || ""}/planning/${planningBackgrounds[index]}")` }} />
               <span className="planningIcon" aria-hidden="true">{icon}</span>
               <strong>{title}</strong>
               <span>{description}</span>
-              <em>Plan with Artha <b>→</b></em>
+              <em>Plan with Dhanive <b>→</b></em>
             </button>
           ))}
         </div>
@@ -1022,26 +1103,82 @@ export default function Home() {
       {error && <div className="error pageError">{error}<button onClick={()=>setError("")}>×</button></div>}
       {toast && <div className="toast">✓ {toast}</div>}
 
-      <section className="stats" id="portfolio"><Stat label="Monthly income" value={income.length ? money(financials.monthlyIncome) : "—"} note={income.length ? `${income.length} source${income.length===1?"":"s"}` : "Add income to calculate"} /><Stat label="Monthly outflow" value={expenses.length || loans.length || investments.length ? money(financials.monthlyOutflow) : "—"} note={expenses.length || loans.length || investments.length ? "Living + EMI + investments" : "Add expenses or commitments"} /><Stat label="Free cash flow" value={hasCashFlowInputs ? money(financials.freeCashFlow) : "—"} note={hasCashFlowInputs ? `${financials.savingsRate.toFixed(1)}% savings rate` : "Add portfolio details to calculate"} positive={hasCashFlowInputs && financials.freeCashFlow>=0} /><Stat label="Tracked net worth" value={investments.length || loans.length || profile.cashSavings > 0 ? money(financials.trackedNetWorth) : "—"} note={investments.length || loans.length || profile.cashSavings > 0 ? `${money(financials.currentInvestmentValue)} investments · ${money(financials.outstandingDebt)} debt` : "Add assets or debt to calculate"} /></section>
+      <section className="stats"><Stat label="Monthly income" value={income.length ? money(financials.monthlyIncome) : "—"} note={income.length ? `${income.length} source${income.length===1?"":"s"}` : "Add income to calculate"} /><Stat label="Monthly outflow" value={expenses.length || loans.length || investments.length ? money(financials.monthlyOutflow) : "—"} note={expenses.length || loans.length || investments.length ? "Living + EMI + investments" : "Add expenses or commitments"} /><Stat label="Free cash flow" value={hasCashFlowInputs ? money(financials.freeCashFlow) : "—"} note={hasCashFlowInputs ? `${financials.savingsRate.toFixed(1)}% savings rate` : "Add portfolio details to calculate"} positive={hasCashFlowInputs && financials.freeCashFlow>=0} /><Stat label="Tracked net worth" value={investments.length || loans.length || profile.cashSavings > 0 ? money(financials.trackedNetWorth) : "—"} note={investments.length || loans.length || profile.cashSavings > 0 ? `${money(financials.currentInvestmentValue)} investments · ${money(financials.outstandingDebt)} debt` : "Add assets or debt to calculate"} /></section>
 
-      <section className="insightGrid"><div className="card insightCard"><div className="cardHeader"><div><div className="eyebrow">FINANCIAL HEALTH</div><h2>What the engine sees</h2><p>Deterministic metrics from the information you entered.</p></div>{hasCashFlowInputs && <span className="healthPill">{financials.health.cashFlow === "positive" ? "Cash flow positive" : "Cash flow needs attention"}</span>}</div>{hasFinancialInputs ? <><div className="healthGrid"><Metric label="Savings rate" value={hasCashFlowInputs && income.length ? `${financials.savingsRate.toFixed(1)}%` : "—"} /><Metric label="Debt service" value={income.length ? `${financials.debtServiceRatio.toFixed(1)}%` : "—"} /><Metric label="Emergency cover" value={financials.essentialMonthlyExpenses > 0 ? `${financials.emergencyCoverageMonths.toFixed(1)} mo` : "—"} /><Metric label="Investing rate" value={income.length ? `${financials.investmentContributionRate.toFixed(1)}%` : "—"} /></div><div className="healthNotes"><div><b>Emergency target</b><span>{financials.essentialMonthlyExpenses > 0 ? `${money(financials.emergencyFundTarget3Months)}–${money(financials.emergencyFundTarget6Months)}` : "Add essential expenses to estimate"}</span></div><div><b>Goal funding</b><span>{goals.length ? financials.health.goalFunding === "covered" ? "Current free cash flow covers required goal contributions." : "Required goal contributions need review against current free cash flow." : "Add a financial goal to assess funding."}</span></div></div></> : <Empty text="Your financial health metrics will appear after you add portfolio or profile details. Nothing is assumed or saved for you." />}</div><div className="card snapshot"><div className="eyebrow">QUICK REVIEW</div><h2>12-month outlook</h2>{hasCashFlowInputs ? <><div className="forecastSummary"><strong>{money(financials.freeCashFlow * 12)}</strong><span>annual free cash flow at today&apos;s run rate</span></div><div className="forecastBars" aria-label="Twelve month run-rate cash flow"><div className="forecastBarsInner">{financials.projectedCashFlow.map(item=><div className="forecastCol" key={item.month}><i style={{height:`${Math.max(8, Math.min(100, Math.abs(item.freeCashFlow)/(Math.max(1,Math.abs(financials.freeCashFlow))*1.15)*100))}%`}}/><span>{item.month.slice(5)}</span></div>)}</div></div><small className="forecastNote">Run-rate only: assumes today&apos;s recurring income, expenses, debt payments and investment contributions stay constant.</small></> : <Empty text="Add income, expenses, loans, or investments to see a 12-month run-rate." />}<div className="snapshotRow"><span>Cash savings</span><b>{profile.cashSavings > 0 ? money(financials.cashSavings) : "—"}</b></div><div className="snapshotRow"><span>Life cover</span><b>{profile.lifeCover > 0 || insurance.length ? money(financials.lifeCover) : "—"}</b></div><div className="snapshotRow"><span>Health cover</span><b>{profile.healthCover > 0 || insurance.length ? money(financials.healthCover) : "—"}</b></div><div className="snapshotRow"><span>Outstanding debt</span><b>{loans.length ? money(financials.outstandingDebt) : "—"}</b></div></div></section>
+      <section className="card insightCard financialHealth" aria-labelledby="financial-health-title">
+        <div className="cardHeader">
+          <div><div className="eyebrow">FINANCIAL HEALTH</div><h2 id="financial-health-title">What the engine sees</h2><p>Deterministic metrics from the information you entered.</p></div>
+          {hasCashFlowInputs && <span className="healthPill">{financials.health.cashFlow === "positive" ? "Cash flow positive" : "Cash flow needs attention"}</span>}
+        </div>
+        {hasFinancialInputs ? <>
+          <div className="healthGrid"><Metric label="Savings rate" value={hasCashFlowInputs && income.length ? `${financials.savingsRate.toFixed(1)}%` : "—"} /><Metric label="Debt service" value={income.length ? `${financials.debtServiceRatio.toFixed(1)}%` : "—"} /><Metric label="Emergency cover" value={financials.essentialMonthlyExpenses > 0 ? `${financials.emergencyCoverageMonths.toFixed(1)} mo` : "—"} /><Metric label="Investing rate" value={income.length ? `${financials.investmentContributionRate.toFixed(1)}%` : "—"} /></div>
+          <div className="healthNotes"><div><b>Emergency target</b><span>{financials.essentialMonthlyExpenses > 0 ? `${money(financials.emergencyFundTarget3Months)}–${money(financials.emergencyFundTarget6Months)}` : "Add essential expenses to estimate"}</span></div><div><b>Goal funding</b><span>{goals.length ? financials.health.goalFunding === "covered" ? "Current free cash flow covers required goal contributions." : "Required goal contributions need review against current free cash flow." : "Add a financial goal to assess funding."}</span></div></div>
+        </> : <Empty text="Your financial health metrics will appear after you add portfolio or profile details. Nothing is assumed or saved for you." />}
+        <div className="runRateReview"><div><div className="eyebrow">12-MONTH RUN RATE</div><strong>{hasCashFlowInputs ? money(financials.freeCashFlow * 12) : "—"}</strong><span>Annual free cash flow at today&apos;s pace</span></div><p>This is a simple estimate based on your current monthly entries staying the same. It is not a forecast of changing income or costs.</p></div>
+      </section>
 
-      <section className="dashboardGrid"><Block title="Income" sub="Monthly and recurring income sources." add="Add income" onAdd={()=>openModal("income")}>{income.length ? income.map(item=><Row key={item.id} title={item.name} sub={`${item.type} · ${item.frequency}`} val={money(item.amount)} actions={<Actions onEdit={()=>openModal("income",item)} onDelete={()=>removeRow("income",item.id)}/>} />) : <Empty text="No income added yet." />}</Block><Block title="Expenses" sub="Recurring spending. EMI is tracked separately in loans." add="Add expense" onAdd={()=>openModal("expense")}>{expenses.length ? expenses.slice(0,8).map(item=><Row key={item.id} title={item.name} sub={`${item.category} · ${item.frequency}`} val={money(item.amount)} actions={<Actions onEdit={()=>openModal("expense",item)} onDelete={()=>removeRow("expenses",item.id)}/>} />) : <Empty text="No recurring expenses added yet." />} {expenses.length>8 && <small className="moreText">Showing 8 of {expenses.length}. Use Transactions for detailed activity.</small>}</Block><Block title="Investments" sub="Holdings, contributions and current value." add="Add investment" onAdd={()=>openModal("investment")}><div className="strip">Current value <b>{investments.length ? money(financials.currentInvestmentValue) : "—"}</b> · Gain/loss <b>{investments.length ? money(financials.investmentGainLoss) : "—"}</b></div>{investments.length ? investments.map(item=><Row key={item.id} title={item.name} sub={`${item.type} · ${item.category} · ${item.mode}`} val={money(item.currentValue)} actions={<Actions onEdit={()=>openModal("investment",item)} onDelete={()=>removeRow("investments",item.id)}/>} />) : <Empty text="No investments added yet." />}</Block><Block title="Loans & debt" sub="Outstanding balances and EMIs." add="Add loan" onAdd={()=>openModal("loan")}><div className="strip">Outstanding <b>{loans.length ? money(financials.outstandingDebt) : "—"}</b> · Monthly EMI <b>{loans.length ? money(financials.debtPayments) : "—"}</b></div>{loans.length ? loans.map(item=><Row key={item.id} title={item.name} sub={`${item.type} · ${item.interestRate}% · ${item.tenureMonths} months`} val={money(item.outstanding)} actions={<Actions onEdit={()=>openModal("loan",item)} onDelete={()=>removeRow("loans",item.id)}/>} />) : <Empty text="No loans added yet." />}</Block></section>
+      <section className="card portfolioPanel" id="portfolio" aria-labelledby="portfolio-title">
+        <div className="portfolioHead"><div><div className="eyebrow">PORTFOLIO</div><h2 id="portfolio-title">Your money</h2><p>Cash flow, holdings, protection, and goals together in one place.</p></div><button className="secondary" onClick={()=>openModal(portfolioTab === "income" ? "income" : portfolioTab === "expenses" ? "expense" : portfolioTab === "investments" ? "investment" : portfolioTab === "loans" ? "loan" : portfolioTab === "insurance" ? "insurance" : "goal")}>Add {portfolioTab === "income" ? "income" : portfolioTab === "expenses" ? "expense" : portfolioTab === "investments" ? "investment" : portfolioTab === "loans" ? "loan" : portfolioTab === "insurance" ? "insurance" : "goal"}</button></div>
+        <div className="portfolioTabs" aria-label="Portfolio categories">
+          <button type="button" className={portfolioTab === "income" ? "active" : ""} aria-pressed={portfolioTab === "income"} onClick={()=>setPortfolioTab("income")}>Income <span>{income.length}</span></button>
+          <button type="button" className={portfolioTab === "expenses" ? "active" : ""} aria-pressed={portfolioTab === "expenses"} onClick={()=>setPortfolioTab("expenses")}>Expenses <span>{expenses.length}</span></button>
+          <button type="button" className={portfolioTab === "investments" ? "active" : ""} aria-pressed={portfolioTab === "investments"} onClick={()=>setPortfolioTab("investments")}>Investments <span>{investments.length}</span></button>
+          <button type="button" className={portfolioTab === "loans" ? "active" : ""} aria-pressed={portfolioTab === "loans"} onClick={()=>setPortfolioTab("loans")}>Loans &amp; debt <span>{loans.length}</span></button>
+          <button type="button" className={portfolioTab === "insurance" ? "active" : ""} aria-pressed={portfolioTab === "insurance"} onClick={()=>setPortfolioTab("insurance")}>Insurance <span>{insurance.length}</span></button>
+          <button type="button" className={portfolioTab === "goals" ? "active" : ""} aria-pressed={portfolioTab === "goals"} onClick={()=>setPortfolioTab("goals")}>Goals <span>{goals.length}</span></button>
+        </div>
+        <div className="portfolioTabContent" aria-live="polite">
+          {portfolioTab === "income" && <><div className="listSummary"><div><span>Planned monthly income</span><strong>{income.length ? money(financials.monthlyIncome) : "—"}</strong></div><small>{income.length ? `${income.length} income source${income.length===1?"":"s"}` : "Add income sources to include them in your plan"}</small></div>{income.length>0 && <button className="listToggle" type="button" aria-expanded={showAllIncome} aria-controls="income-records" onClick={()=>setShowAllIncome(v=>!v)}>{showAllIncome?"Hide entries":`Manage entries (${income.length})`}</button>}{income.length===0 && <Empty text="No income sources added yet." />}<div id="income-records" hidden={!showAllIncome}>{income.map(item=><Row key={item.id} title={item.name} sub={`${item.type} · ${item.frequency}`} val={money(item.amount)} actions={<Actions onEdit={()=>openModal("income",item)} onDelete={()=>removeRow("income",item.id)}/>} />)}</div></>}
+          {portfolioTab === "expenses" && <><div className="listSummary"><div><span>Planned monthly expenses</span><strong>{expenses.length ? money(financials.livingExpenses) : "—"}</strong></div><small>{expenses.length ? `${expenses.length} recurring item${expenses.length===1?"":"s"}` : "Add recurring expenses to include them in your plan"}</small></div>{expenses.length>0 && <button className="listToggle" type="button" aria-expanded={showAllExpenses} aria-controls="expense-records" onClick={()=>setShowAllExpenses(v=>!v)}>{showAllExpenses?"Hide entries":`Manage entries (${expenses.length})`}</button>}{expenses.length===0 && <Empty text="No recurring expenses added yet." />}<div id="expense-records" hidden={!showAllExpenses}>{expenses.map(item=><Row key={item.id} title={item.name} sub={`${item.category} · ${item.frequency}`} val={money(item.amount)} actions={<Actions onEdit={()=>openModal("expense",item)} onDelete={()=>removeRow("expenses",item.id)}/>} />)}</div></>}
+          {portfolioTab === "investments" && <><div className="listSummary"><div><span>Current investment value</span><strong>{investments.length ? money(financials.currentInvestmentValue) : "—"}</strong></div><small>{investments.length ? `${money(financials.investmentGainLoss)} gain / loss · ${investments.length} holding${investments.length===1?"":"s"}` : "Add holdings to track your portfolio"}</small></div>{investments.length>0 && <button className="listToggle" type="button" aria-expanded={showAllInvestments} aria-controls="investment-records" onClick={()=>setShowAllInvestments(v=>!v)}>{showAllInvestments?"Hide entries":`Manage entries (${investments.length})`}</button>}{investments.length===0 && <Empty text="No investments added yet." />}<div id="investment-records" hidden={!showAllInvestments}>{investments.map(item=><Row key={item.id} title={item.name} sub={`${item.type} · ${item.category} · ${item.mode}`} val={money(item.currentValue)} actions={<Actions onEdit={()=>openModal("investment",item)} onDelete={()=>removeRow("investments",item.id)}/>} />)}</div></>}
+          {portfolioTab === "loans" && <><div className="listSummary"><div><span>Outstanding debt</span><strong>{loans.length ? money(financials.outstandingDebt) : "—"}</strong></div><small>{loans.length ? `${money(financials.debtPayments)} monthly EMI · ${loans.length} loan${loans.length===1?"":"s"}` : "Add a loan to track balances and EMIs"}</small></div>{loans.length>0 && <button className="listToggle" type="button" aria-expanded={showAllLoans} aria-controls="loan-records" onClick={()=>setShowAllLoans(v=>!v)}>{showAllLoans?"Hide entries":`Manage entries (${loans.length})`}</button>}{loans.length===0 && <Empty text="No loans added yet." />}<div id="loan-records" hidden={!showAllLoans}>{loans.map(item=><Row key={item.id} title={item.name} sub={`${item.type} · ${item.interestRate}% · ${item.tenureMonths} months`} val={money(item.outstanding)} actions={<Actions onEdit={()=>openModal("loan",item)} onDelete={()=>removeRow("loans",item.id)}/>} />)}</div></>}
+          {portfolioTab === "insurance" && <><div className="listSummary"><div><span>Insurance cover tracked</span><strong>{insurance.length ? money(insurance.reduce((total, item) => total + item.coverage, 0)) : "—"}</strong></div><small>{insurance.length ? `${insurance.length} polic${insurance.length===1?"y":"ies"} · life ${money(financials.lifeCover)} · health ${money(financials.healthCover)}` : "Add a policy to track cover and renewal context"}</small></div>{insurance.length>0 && <button className="listToggle" type="button" aria-expanded={showAllInsurance} aria-controls="insurance-records" onClick={()=>setShowAllInsurance(v=>!v)}>{showAllInsurance?"Hide policies":`Manage policies (${insurance.length})`}</button>}{insurance.length===0 && <Empty text="No insurance policies added yet." />}<div id="insurance-records" hidden={!showAllInsurance}>{insurance.map(item=><Row key={item.id} title={item.type} sub={`${item.provider || "Provider not added"} · ${item.frequency}`} val={money(item.coverage)} actions={<Actions onEdit={()=>openModal("insurance",item)} onDelete={()=>removeRow("insurance",item.id)}/>} />)}</div></>}
+          {portfolioTab === "goals" && <><div className="listSummary"><div><span>Total saved toward goals</span><strong>{goals.length ? money(financials.goals.reduce((total, goal) => total + goal.currentAmount, 0)) : "—"}</strong></div><small>{goals.length ? `${money(financials.goals.reduce((total, goal) => total + goal.targetAmount, 0))} target total · ${money(financials.goals.reduce((total, goal) => total + goal.requiredMonthlyContribution, 0))}/mo needed across all goals` : "Add goals to track targets and monthly contributions"}</small></div>{goals.length>0 && <button className="listToggle" type="button" aria-expanded={showAllGoals} aria-controls="goal-records" onClick={()=>setShowAllGoals(v=>!v)}>{showAllGoals?"Hide goals":`Manage goals (${goals.length})`}</button>}{goals.length===0 && <Empty text="No goals added yet." />}<div id="goal-records" hidden={!showAllGoals}>{financials.goals.map((item,index)=>{const storedGoal=goals.find(g=>g.name===item.name && g.targetAmount===item.targetAmount && g.currentAmount===item.currentAmount && g.targetDate===item.targetDate) || goals[index];return <div className="goal" key={storedGoal?.id || `${item.name}-${index}`}><div><b>{item.name}</b><small>{money(item.currentAmount)} of {money(item.targetAmount)} · {item.progress.toFixed(0)}% · {item.monthsRemaining} months left</small></div><div className="goalValue">{money(item.requiredMonthlyContribution)}/mo</div><div className="progress"><i style={{width:`${item.progress}%`}}/></div><div className="goalActions"><Actions onEdit={()=>storedGoal && openModal("goal",storedGoal)} onDelete={()=>{if(storedGoal?.id) removeRow("goals",storedGoal.id);}}/></div></div>})}</div></>}
+        </div>
+      </section>
+      <section className="wideGrid"><div className="card block"><div className="blockhead"><div><div className="eyebrow">SPENDING PATTERN</div><h2>Where your recurring money goes</h2><p>Monthly normalized values from your expense records.</p></div></div>{spendingByCategory.length ? <div className="categoryBars">{spendingByCategory.map(([category, amount])=><div className="categoryBar" key={category}><div><span>{category}</span><b>{money(amount)}</b></div><div className="barTrack"><i style={{width:`${Math.min(100,(amount/Math.max(1,spendingByCategory[0][1]))*100)}%`}}/></div></div>)}</div> : <Empty text="Add expenses to see spending patterns." />}</div><div className="card block"><div className="blockhead"><div><div className="eyebrow">SCENARIO LAB</div><h2>What if I save more?</h2><p>A simple deterministic scenario. The amount is kept in this browser only after you change it.</p></div></div>{hasCashFlowInputs ? <><label className="label">Extra monthly saving <b>{money(scenarioExtra)}</b></label><input className="range" type="range" min="0" max="50000" step="1000" value={scenarioExtra} onChange={e=>updateScenarioExtra(numberValue(e.target.value))}/><div className="scenarioCards"><Metric label="Next free cash flow" value={money(scenario.nextFreeCashFlow)} /><Metric label="Emergency months after 12 mo" value={financials.essentialMonthlyExpenses > 0 ? `${scenario.nextEmergencyMonths.toFixed(1)} mo` : "—"} /><Metric label="Cash after goal contributions" value={goals.length ? money(scenario.cashAfterGoals) : "—"} /></div><small className="scenarioNote">Combined monthly goal contributions: {money(scenario.goalContributionNeed)}. Monthly investment contributions of {money(financials.investmentContributions)} are already counted in free cash flow.</small><button className="secondary fullScenario" onClick={()=>{openModal("scenario");setAnswer("");}}>Ask Dhanive to explain</button></> : <Empty text="Add income, expenses, loans, or investments before running a scenario." />}</div></section>
 
-      <section className="wideGrid"><div className="card block"><div className="blockhead"><div><div className="eyebrow">PROTECTION</div><h2>Insurance</h2><p>Keep policy coverage and renewal context in one place.</p></div><button className="secondary" onClick={()=>openModal("insurance")}>Add insurance</button></div>{insurance.length ? insurance.map(item=><Row key={item.id} title={item.type} sub={`${item.provider || "Provider not added"} · ${item.frequency}`} val={money(item.coverage)} actions={<Actions onEdit={()=>openModal("insurance",item)} onDelete={()=>removeRow("insurance",item.id)}/>} />) : <Empty text="No insurance policies added yet." />}</div><div className="card block"><div className="blockhead"><div><div className="eyebrow">GOALS</div><h2>Financial goals</h2><p>Required monthly contributions are calculated from target date and amount.</p></div><button className="secondary" onClick={()=>openModal("goal")}>Add goal</button></div>{financials.goals.length ? financials.goals.map((item,index)=>{const storedGoal=goals.find(g=>g.name===item.name && g.targetAmount===item.targetAmount && g.currentAmount===item.currentAmount && g.targetDate===item.targetDate) || goals[index];return <div className="goal" key={storedGoal?.id || `${item.name}-${index}`}><div><b>{item.name}</b><small>{money(item.currentAmount)} of {money(item.targetAmount)} · {item.progress.toFixed(0)}% · {item.monthsRemaining} months</small></div><div className="goalValue">{money(item.requiredMonthlyContribution)}/mo</div><div className="progress"><i style={{width:`${item.progress}%`}}/></div><div className="goalActions"><Actions onEdit={()=>storedGoal && openModal("goal",storedGoal)} onDelete={()=>{if(storedGoal?.id) removeRow("goals",storedGoal.id);}}/></div></div>}) : <Empty text="No goals added yet." />}</div></section>
+      <section className="card monthTracker" id="transactions" aria-labelledby="month-tracker-title">
+        <div className="blockhead monthTrackerHead">
+          <div><div className="eyebrow">MONTH BY MONTH</div><h2 id="month-tracker-title">Monthly entries</h2><p>Add each dated income or expense once, with its category and source. Review and manage your actual entries by month; recurring plan amounts stay separate.</p></div>
+          <button className="primary" type="button" onClick={()=>openModal("transaction")}>＋ Add entry</button>
+        </div>
+        <div className="monthTrackerControls">
+          <Field label="Year"><select value={spendingYear} onChange={e=>{setSpendingYear(Number(e.target.value));setSpendingMonth("all");}}>{Array.from({length:25},(_,index)=>new Date().getFullYear()-index).map(year=><option value={year} key={year}>{year}</option>)}</select></Field>
+          <Field label="Month"><select value={spendingMonth} onChange={e=>setSpendingMonth(e.target.value)}><option value="all">All months</option>{Array.from({length:12},(_,month)=><option value={month} key={month}>{new Date(2020,month,1).toLocaleString("en-IN",{month:"long"})}</option>)}</select></Field>
+        </div>
+        {yearTransactionsError ? <div className="error" role="alert"><span>{yearTransactionsError}</span><button className="secondary" type="button" onClick={()=>setYearTransactionsReload(v=>v+1)}>Retry</button></div> : yearTransactionsLoading ? <div className="empty" role="status">Loading entries for {spendingYear}…</div> : yearTransactions.length === 0 ? <Empty text={`No transaction entries for ${spendingYear} yet. Add an expense and choose its date to start building your spending history.`} /> : <>
+          <div className="monthSummaryCards">
+            <Metric label={spendingMonth === "all" ? `${spendingYear} recorded spending` : `${new Date(spendingYear,Number(spendingMonth),1).toLocaleString("en-IN",{month:"long"})} spending`} value={money(selectedPeriodSpending)} />
+            <Metric label="Average month with entries" value={money(averageRecordedMonth)} />
+            <Metric label="12-month run-rate" value={annualizedSpending === null ? "Need 3 months" : money(annualizedSpending)} />
+          </div>
+          <div className="monthTrendHeader"><h3>Recorded spending by month</h3><span>Peak: {peakSpendingMonth.expenses ? `${new Date(spendingYear,peakSpendingMonth.month,1).toLocaleString("en-IN",{month:"long"})} · ${money(peakSpendingMonth.expenses)}` : "No spending entries"}</span></div>
+          <div className="monthTrend" aria-label={`Recorded expense entries for each month of ${spendingYear}`}>
+            {monthlyTransactionSummary.map((item)=>{
+              const maxExpense=Math.max(1,...monthlyTransactionSummary.map((month)=>month.expenses));
+              const isSelected=spendingMonth===String(item.month);
+              return <button className={`monthTrendColumn${isSelected?" selected":""}`} type="button" key={item.month} title={`${new Date(spendingYear,item.month,1).toLocaleString("en-IN",{month:"long"})}: ${money(item.expenses)}${item.count?` from ${item.count} entries`:" · no entries"}`} aria-label={`Filter ${new Date(spendingYear,item.month,1).toLocaleString("en-IN",{month:"long"})} ${spendingYear}, recorded spending ${money(item.expenses)}`} aria-pressed={isSelected} onClick={()=>setSpendingMonth(isSelected?"all":String(item.month))}>
+                <span className="monthTrendValue">{item.expenses ? money(item.expenses) : "—"}</span><span className="monthTrendTrack"><i style={{height:item.expenses?`${Math.max(5,(item.expenses/maxExpense)*100)}%`:"0%"}}/></span><span className="monthTrendLabel">{new Date(spendingYear,item.month,1).toLocaleString("en-IN",{month:"short"})}</span>
+              </button>;
+            })}
+          </div>
+          <p className="monthTrackerNote">Run-rate is a simple estimate based on months with recorded expenses; it is not a prediction. Months without entries are shown as “—”, not treated as zero.</p>
+          {yearTransactionsTruncated && <p className="monthTrackerNote" role="status">Showing the first 5,000 entries for this year. Choose a month to focus the view.</p>}
+          <div className="monthEntriesHeader"><h3>{spendingMonth === "all" ? `Entries in ${spendingYear}` : `${new Date(spendingYear,Number(spendingMonth),1).toLocaleString("en-IN",{month:"long"})} ${spendingYear}`}</h3><span>{filteredYearTransactions.length} {filteredYearTransactions.length===1?"entry":"entries"}</span></div>
+          {visibleYearTransactions.length ? <div className="transactionTable monthEntriesTable"><div className="txRow txHead monthEntryRow"><span>Date</span><span>Description</span><span>Category</span><span>Amount</span><span>Source &amp; actions</span></div>{visibleYearTransactions.map((item)=><div className="txRow monthEntryRow" key={item.id}><span>{formatDate(item.transactionDate)}</span><span><b>{item.description}</b></span><span>{item.category||"Uncategorized"}</span><span className={/income|credit/i.test(item.transactionType)?"txPositive":""}>{/income|credit/i.test(item.transactionType)?"+":"-"}{money(item.amount)}</span><span><small className="transactionSource">{item.source || "Manual"}</small><span className="rowactions"><button className="mini" onClick={()=>openModal("transaction",item)}>Edit</button><button className="del" onClick={()=>removeRow("transactions",item.id)}>Delete</button></span></span></div>)}</div> : <Empty text="No entries in this month." />}
+          {filteredYearTransactions.length>visibleYearTransactions.length && <small className="moreText">Showing the latest {visibleYearTransactions.length} entries in this view.</small>}
+        </>}
+      </section>
 
-      <section className="wideGrid"><div className="card block"><div className="blockhead"><div><div className="eyebrow">SPENDING PATTERN</div><h2>Where your recurring money goes</h2><p>Monthly normalized values from your expense records.</p></div></div>{spendingByCategory.length ? <div className="categoryBars">{spendingByCategory.map(([category, amount])=><div className="categoryBar" key={category}><div><span>{category}</span><b>{money(amount)}</b></div><div className="barTrack"><i style={{width:`${Math.min(100,(amount/Math.max(1,spendingByCategory[0][1]))*100)}%`}}/></div></div>)}</div> : <Empty text="Add expenses to see spending patterns." />}</div><div className="card block"><div className="blockhead"><div><div className="eyebrow">SCENARIO LAB</div><h2>What if I save more?</h2><p>A simple deterministic scenario. The amount is kept in this browser only after you change it.</p></div></div>{hasCashFlowInputs ? <><label className="label">Extra monthly saving <b>{money(scenarioExtra)}</b></label><input className="range" type="range" min="0" max="50000" step="1000" value={scenarioExtra} onChange={e=>updateScenarioExtra(numberValue(e.target.value))}/><div className="scenarioCards"><Metric label="Next free cash flow" value={money(scenario.nextFreeCashFlow)} /><Metric label="Emergency months after 12 mo" value={financials.essentialMonthlyExpenses > 0 ? `${scenario.nextEmergencyMonths.toFixed(1)} mo` : "—"} /><Metric label="Goals supported" value={goals.length ? `${scenario.fundedGoals}/${financials.goals.length}` : "—"} /></div><button className="secondary fullScenario" onClick={()=>{openModal("scenario");setAnswer("");}}>Ask Artha to explain</button></> : <Empty text="Add income, expenses, loans, or investments before running a scenario." />}</div></section>
+      <section className="card coach" id="ai-coach"><div className="coachIntro"><div><div className="eyebrow">✦ DHANIVE AI COACH</div><h2>Ask Dhanive anything about your money.</h2><p>For production AI guidance, Dhanive retrieves your records securely and sends calculated financial summaries to the configured AI provider. Your login credentials are never sent. The Financial Engine remains the source of truth.</p></div><div className="coachMark">✦</div></div><div className="coachDifference" aria-label="How Dhanive is different"><article><strong>Your numbers lead</strong><span>A deterministic engine calculates your financial picture; AI explains the results.</span></article><article><strong>Plans connect</strong><span>Home, car, debt, safety, goals and retirement use one financial picture.</span></article><article><strong>Unknowns stay visible</strong><span>Missing inputs and assumptions are called out instead of filled in for you.</span></article></div><div className="prompts">{prompts.map(([icon,title,text])=><button className={`prompt ${question===text?"selected":""}`} key={title} onClick={()=>{setQuestion(text);setAnswer("");setError("")}}><em>{icon}</em><strong>{title}</strong><small>Use prompt →</small></button>)}</div><label className="label" htmlFor="coach-question">Or ask your own question</label><textarea id="coach-question" value={question} onChange={e=>setQuestion(e.target.value)} placeholder="Example: How should I balance my emergency fund and investing?" rows={5}/><small className="note">On localhost, Dhanive uses the local AI gateway at <code>http://localhost:8787/api/coach</code>. If it is unavailable, Dhanive automatically falls back to deterministic engine guidance.</small><div className="coachActions"><button className="primary" disabled={aiLoading} onClick={()=>askDhanive()}>{aiLoading?"Dhanive is thinking…":"Ask Dhanive for guidance →"}</button><button className="secondary" disabled={aiLoading} onClick={()=>askDhanive("Review my finances and tell me the main areas I should review next. Use only the facts in my Dhanive data.","review")}>Run financial review</button></div>{answer && <div className="output"><div className="outputTitle">Dhanive says</div><div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></div></div>}<small className="note">Educational guidance only. Dhanive is not a SEBI-registered investment adviser or IRDAI insurance intermediary. Always verify product-specific decisions and current rules independently.</small></section>
 
-      <section className="card transactionCard"><div className="blockhead"><div><div className="eyebrow">TRANSACTIONS</div><h2>Recent activity</h2><p>Optional detailed transactions for richer AI review and categorization.</p></div><button className="secondary" onClick={()=>openModal("transaction")}>Add transaction</button></div>{transactions.length ? <div className="transactionTable"><div className="txRow txHead"><span>Date</span><span>Description</span><span>Category</span><span>Amount</span><span/></div>{transactions.map(item=><div className="txRow" key={item.id}><span>{formatDate(item.transactionDate)}</span><span><b>{item.description}</b><small>{item.source}</small></span><span>{item.category || "Uncategorized"}</span><span className={/income|credit/i.test(item.transactionType)?"txPositive":""}>{/income|credit/i.test(item.transactionType)?"+":"-"}{money(item.amount)}</span><span className="rowactions"><button className="mini" onClick={()=>openModal("transaction",item)}>Edit</button><button className="del" onClick={()=>removeRow("transactions",item.id)}>Delete</button></span></div>)}</div> : <Empty text="No detailed transactions yet. Add a few to make Artha's reviews more useful." />}</section>
+      <footer className="footer"><div><strong>Dhanive</strong><span>Personal finance &amp; planning</span><Link href="/release-notes/">Release notes <span aria-hidden="true">↗</span></Link></div><div>Built with <span aria-label="love">♥</span> by <b>Harish Sarma</b> · © 2026</div></footer>
 
-      <section className="card coach" id="ai-coach"><div className="coachIntro"><div><div className="eyebrow">✦ ARTHA AI COACH</div><h2>Ask Artha anything about your money.</h2><p>For production AI guidance, Artha retrieves your records securely and sends calculated financial summaries to the configured AI provider. Your login credentials are never sent. The Financial Engine remains the source of truth.</p></div><div className="coachMark">✦</div></div><div className="prompts">{prompts.map(([icon,title,text])=><button className={`prompt ${question===text?"selected":""}`} key={title} onClick={()=>{setQuestion(text);setAnswer("");setError("")}}><em>{icon}</em><strong>{title}</strong><small>Use prompt →</small></button>)}</div><label className="label" htmlFor="coach-question">Or ask your own question</label><textarea id="coach-question" value={question} onChange={e=>setQuestion(e.target.value)} placeholder="Example: How should I balance my emergency fund and investing?" rows={5}/><small className="note">On localhost, Artha uses the local AI gateway at <code>http://localhost:8787/api/coach</code>. If it is unavailable, Artha automatically falls back to deterministic engine guidance.</small><div className="coachActions"><button className="primary" disabled={aiLoading} onClick={()=>askArtha()}>{aiLoading?"Artha is thinking…":"Ask Artha for guidance →"}</button><button className="secondary" disabled={aiLoading} onClick={()=>askArtha("Review my finances and tell me the main areas I should review next. Use only the facts in my Artha data.","review")}>Run financial review</button></div>{answer && <div className="output"><div className="outputTitle">Artha says</div><div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></div></div>}<small className="note">Educational guidance only. Artha is not a SEBI-registered investment adviser or IRDAI insurance intermediary. Always verify product-specific decisions and current rules independently.</small></section>
-
-      <footer className="footer"><div><strong>Artha Compass</strong><span>Personal finance &amp; planning</span><Link href="/release-notes/">Release notes <span aria-hidden="true">↗</span></Link></div><div>Built with <span aria-label="love">♥</span> by <b>Harish Sarma</b> · © 2026</div></footer>
-
-      {modal === "profile" && <Modal title="Profile settings" close={closeModal} save={saveModal} busy={saveBusy}><div className="formGrid two"><Field label="Your name"><input value={form.name||""} onChange={e=>setField("name",e.target.value)}/></Field><Field label="Age"><input type="number" min="18" max="100" value={form.age||""} onChange={e=>setField("age",e.target.value)}/></Field><Field label="Dependents"><input type="number" min="0" value={form.dependents||""} onChange={e=>setField("dependents",e.target.value)}/></Field><Field label="Country"><input value={form.country||""} onChange={e=>setField("country",e.target.value)} placeholder="Optional"/></Field><Field label="Primary goal"><select value={form.primaryGoal||""} onChange={e=>setField("primaryGoal",e.target.value)}><option value="">Not set</option>{["Build emergency fund","Save for marriage","Invest more","Pay off debt","Major purchase","Build wealth","Other"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Risk profile"><select value={form.riskProfile||""} onChange={e=>setField("riskProfile",e.target.value)}><option value="">Not assessed</option>{["Conservative","Moderate","Aggressive"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Investment horizon"><select value={form.investmentHorizon||""} onChange={e=>setField("investmentHorizon",e.target.value)}><option value="">Not set</option>{["< 1 year","1–3 years","3–5 years","5+ years"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Liquid emergency savings"><input type="number" min="0" value={form.cashSavings||""} onChange={e=>setField("cashSavings",e.target.value)}/></Field><Field label="Life / term cover"><input type="number" min="0" value={form.lifeCover||""} onChange={e=>setField("lifeCover",e.target.value)}/></Field><Field label="Health cover"><input type="number" min="0" value={form.healthCover||""} onChange={e=>setField("healthCover",e.target.value)}/></Field></div></Modal>}
+      {modal === "profile" && <Modal title="Profile settings" close={closeModal} save={saveModal} busy={saveBusy} error={error}><div className="formGrid two"><Field label="Your name"><input value={form.name||""} onChange={e=>setField("name",e.target.value)}/></Field><Field label="Age"><input type="number" min="18" max="100" value={form.age||""} onChange={e=>setField("age",e.target.value)}/></Field><Field label="Dependents"><input type="number" min="0" value={form.dependents||""} onChange={e=>setField("dependents",e.target.value)}/></Field><Field label="Country"><input value={form.country||""} onChange={e=>setField("country",e.target.value)} placeholder="Optional"/></Field><Field label="Primary goal"><select value={form.primaryGoal||""} onChange={e=>setField("primaryGoal",e.target.value)}><option value="">Not set</option>{["Build emergency fund","Save for marriage","Invest more","Pay off debt","Major purchase","Build wealth","Other"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Risk profile"><select value={form.riskProfile||""} onChange={e=>setField("riskProfile",e.target.value)}><option value="">Not assessed</option>{["Conservative","Moderate","Aggressive"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Investment horizon"><select value={form.investmentHorizon||""} onChange={e=>setField("investmentHorizon",e.target.value)}><option value="">Not set</option>{["< 1 year","1–3 years","3–5 years","5+ years"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Liquid emergency savings"><input type="number" min="0" value={form.cashSavings||""} onChange={e=>setField("cashSavings",e.target.value)}/></Field><Field label="Life / term cover"><input type="number" min="0" value={form.lifeCover||""} onChange={e=>setField("lifeCover",e.target.value)}/></Field><Field label="Health cover"><input type="number" min="0" value={form.healthCover||""} onChange={e=>setField("healthCover",e.target.value)}/></Field></div></Modal>}
       {modal === "security" && <Modal title="Account & security" close={closeModal} save={updatePassword} busy={false}><div className="securityPanel"><div className="securityItem"><span>Signed-in email</span><b>{authEmail || "Authenticated account"}</b></div><div className="securityItem"><span>Data protection</span><b>Supabase Auth + Postgres RLS</b></div><div className="securityItem"><span>Change password</span><b>Updates your current account password</b></div><Field label="New password"><input type="password" minLength={8} value={securityPassword} onChange={e=>setSecurityPassword(e.target.value)} placeholder="At least 8 characters"/></Field><Field label="Confirm new password"><input type="password" minLength={8} value={securityConfirm} onChange={e=>setSecurityConfirm(e.target.value)} placeholder="Re-enter password"/></Field></div></Modal>}
-      {(modal === "income" || modal === "expense" || modal === "investment" || modal === "loan" || modal === "insurance" || modal === "goal" || modal === "transaction") && <DataModal type={modal} form={form} setField={setField} saveModal={saveModal} closeModal={closeModal} busy={saveBusy} autoCategorize={modal === "transaction" ? autoCategorize : undefined} categorizing={categorizing} />}
-      {modal === "scenario" && <Modal title="Scenario explanation" close={closeModal} wide><div className="scenarioExplain"><div className="scenarioCards"><Metric label="Extra saving" value={money(scenarioExtra)} /><Metric label="Next free cash flow" value={money(scenario.nextFreeCashFlow)} /><Metric label="Emergency cover after 12 mo" value={`${scenario.nextEmergencyMonths.toFixed(1)} months`} /></div><button className="primary" disabled={aiLoading} onClick={()=>askArtha(`I am considering adding ${money(scenarioExtra)} of extra monthly savings. Explain what this changes in my current Artha financial picture, including cash flow, emergency fund coverage and goal funding. Use the engine facts only.`,"scenario",{...scenario,extraMonthlySaving:scenarioExtra})}>{aiLoading?"Artha is thinking…":"Ask Artha to explain this scenario →"}</button>{answer && <div className="output"><div className="outputTitle">Artha says</div><div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></div></div>}</div></Modal>}
+      {(modal === "income" || modal === "expense" || modal === "investment" || modal === "loan" || modal === "insurance" || modal === "goal" || modal === "transaction") && <DataModal type={modal} form={form} setField={setField} saveModal={saveModal} closeModal={closeModal} busy={saveBusy} error={error} autoCategorize={modal === "transaction" ? autoCategorize : undefined} categorizing={categorizing} />}
+      {modal === "scenario" && <Modal title="Scenario explanation" close={closeModal} wide><div className="scenarioExplain"><div className="scenarioCards"><Metric label="Extra saving" value={money(scenarioExtra)} /><Metric label="Next free cash flow" value={money(scenario.nextFreeCashFlow)} /><Metric label="After goal contributions" value={goals.length ? money(scenario.cashAfterGoals) : "—"} /><Metric label="Emergency cover after 12 mo" value={`${scenario.nextEmergencyMonths.toFixed(1)} months`} /></div><button className="primary" disabled={aiLoading} onClick={()=>askDhanive(`I am considering adding ${money(scenarioExtra)} of extra monthly savings. Explain what this changes in my current Dhanive financial picture, including cash flow, emergency fund coverage and goal funding. Use the engine facts only.`,"scenario",{...scenario,extraMonthlySaving:scenarioExtra})}>{aiLoading?"Dhanive is thinking…":"Ask Dhanive to explain this scenario →"}</button>{answer && <div className="output"><div className="outputTitle">Dhanive says</div><div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></div></div>}</div></Modal>}
     </main>
   );
 }
@@ -1055,9 +1192,10 @@ function Row({title,sub,val,actions}:{title:string;sub:string;val:string;actions
 function Block({title,sub,add,onAdd,children}:{title:string;sub:string;add:string;onAdd:()=>void;children:React.ReactNode}){return <section className="card block"><div className="blockhead"><div><h2>{title}</h2><p>{sub}</p></div><button className="secondary" onClick={onAdd}>{add}</button></div>{children}</section>}
 function Field({label,children}:{label:string;children:React.ReactNode}){return <label className="field"><span>{label}</span>{children}</label>}
 
-function Modal({title,close,save,busy,children,wide=false}:{title:string;close:()=>void;save?:()=>void;busy?:boolean;children:React.ReactNode;wide?:boolean}){return <div className="backdrop" onMouseDown={close}><div className={`modal ${wide?"modalWide":""}`} onMouseDown={e=>e.stopPropagation()}><div className="modalhead"><div><h2>{title}</h2></div><button className="x" onClick={close}>×</button></div><div className="modalbody">{children}<div className="modalactions"><button
+function Modal({title,close,save,busy,children,wide=false,error}:{title:string;close:()=>void;save?:()=>void;busy?:boolean;children:React.ReactNode;wide?:boolean;error?:string}){return <div className="backdrop" onMouseDown={busy?undefined:close}><div className={`modal ${wide?"modalWide":""}`} onMouseDown={e=>e.stopPropagation()}><div className="modalhead"><div><h2>{title}</h2></div><button className="x" disabled={busy} onClick={close}>×</button></div><div className="modalbody">{error && <div className="error modalError" role="alert">{error}</div>}{children}<div className="modalactions"><button
   type="button"
   className="secondary"
+  disabled={busy}
   onClick={close}
 >
   Cancel
@@ -1071,15 +1209,15 @@ function Modal({title,close,save,busy,children,wide=false}:{title:string;close:(
   {busy ? "Saving…" : "Save changes"}
 </button></div></div></div></div>}
 
-function DataModal({type,form,setField,saveModal,closeModal,busy,autoCategorize,categorizing}:{type:ModalType;form:FormState;setField:(k:string,v:string|number)=>void;saveModal:()=>void;closeModal:()=>void;busy:boolean;autoCategorize?:()=>void;categorizing?:boolean}){
+function DataModal({type,form,setField,saveModal,closeModal,busy,error,autoCategorize,categorizing}:{type:ModalType;form:FormState;setField:(k:string,v:string|number)=>void;saveModal:()=>void;closeModal:()=>void;busy:boolean;error?:string;autoCategorize?:()=>void;categorizing?:boolean}){
   const titles:Record<string,string>={income:"Add income",expense:"Add expense",investment:"Add investment",loan:"Add loan",insurance:"Add insurance",goal:"Add financial goal",transaction:"Add transaction"};
-  return <Modal title={titles[type]||"Artha"} close={closeModal} save={saveModal} busy={busy} wide={type==="investment"||type==="transaction"}><div className="formGrid two">
+  return <Modal title={titles[type]||"Dhanive"} close={closeModal} save={saveModal} busy={busy} error={error} wide={type==="investment"||type==="transaction"}><div className="formGrid two">
     {type==="income" && <><Field label="Source"><input value={form.name||""} onChange={e=>setField("name",e.target.value)} placeholder="Salary, rent, freelance…"/></Field><Field label="Description"><select value={form.type||"Salary"} onChange={e=>setField("type",e.target.value)}>{incomeTypes.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Amount"><input type="number" min="0" value={form.amount||""} onChange={e=>setField("amount",e.target.value)}/></Field><Field label="Frequency"><select value={form.frequency||"Monthly"} onChange={e=>setField("frequency",e.target.value)}>{frequencies.map(v=><option key={v}>{v}</option>)}</select></Field></>}
     {type==="expense" && <><Field label="Description"><input value={form.name||""} onChange={e=>setField("name",e.target.value)} placeholder="Rent, groceries…"/></Field><Field label="Category"><select value={form.category||"Housing"} onChange={e=>setField("category",e.target.value)}>{expenseCategories.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Amount"><input type="number" min="0" value={form.amount||""} onChange={e=>setField("amount",e.target.value)}/></Field><Field label="Frequency"><select value={form.frequency||"Monthly"} onChange={e=>setField("frequency",e.target.value)}>{frequencies.map(v=><option key={v}>{v}</option>)}</select></Field></>}
     {type==="investment" && <><Field label="Name"><input value={form.name||""} onChange={e=>setField("name",e.target.value)} placeholder="SBI ELSS, stock…"/></Field><Field label="Type"><select value={form.type||"Mutual Fund"} onChange={e=>setField("type",e.target.value)}>{investmentTypes.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Category"><select value={form.category||"Equity"} onChange={e=>setField("category",e.target.value)}>{investmentCategories.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Mode"><select value={form.mode||"SIP"} onChange={e=>setField("mode",e.target.value)}>{["SIP","Lump sum","Employer","Other"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Monthly contribution"><input type="number" min="0" value={form.monthlyAmount||""} onChange={e=>setField("monthlyAmount",e.target.value)}/></Field><Field label="Total invested"><input type="number" min="0" value={form.investedAmount||""} onChange={e=>setField("investedAmount",e.target.value)}/></Field><Field label="Current value"><input type="number" min="0" value={form.currentValue||""} onChange={e=>setField("currentValue",e.target.value)}/></Field><Field label="Start date"><input type="date" value={form.startDate||""} onChange={e=>setField("startDate",e.target.value)}/></Field></>}
     {type==="loan" && <><Field label="Name"><input value={form.name||""} onChange={e=>setField("name",e.target.value)} placeholder="Car loan"/></Field><Field label="Loan type"><select value={form.type||"Car Loan"} onChange={e=>setField("type",e.target.value)}>{loanTypes.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Original amount"><input type="number" min="0" value={form.originalAmount||""} onChange={e=>setField("originalAmount",e.target.value)}/></Field><Field label="Outstanding"><input type="number" min="0" value={form.outstanding||""} onChange={e=>setField("outstanding",e.target.value)}/></Field><Field label="Monthly EMI"><input type="number" min="0" value={form.emi||""} onChange={e=>setField("emi",e.target.value)}/></Field><Field label="Interest rate %"><input type="number" step="0.01" min="0" value={form.interestRate||""} onChange={e=>setField("interestRate",e.target.value)}/></Field><Field label="Tenure remaining months"><input type="number" min="0" value={form.tenureMonths||""} onChange={e=>setField("tenureMonths",e.target.value)}/></Field></>}
     {type==="insurance" && <><Field label="Policy type"><select value={form.type||"Life / Term"} onChange={e=>setField("type",e.target.value)}>{insuranceTypes.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Provider"><input value={form.provider||""} onChange={e=>setField("provider",e.target.value)}/></Field><Field label="Coverage"><input type="number" min="0" value={form.coverage||""} onChange={e=>setField("coverage",e.target.value)}/></Field><Field label="Premium"><input type="number" min="0" value={form.premium||""} onChange={e=>setField("premium",e.target.value)}/></Field><Field label="Premium frequency"><select value={form.frequency||"Yearly"} onChange={e=>setField("frequency",e.target.value)}>{frequencies.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Renewal date"><input type="date" value={form.renewalDate||""} onChange={e=>setField("renewalDate",e.target.value)}/></Field></>}
     {type==="goal" && <><Field label="Goal type"><select value={form.type||"Other"} onChange={e=>setField("type",e.target.value)}>{goalTypes.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Goal name"><input value={form.name||""} onChange={e=>setField("name",e.target.value)} placeholder="Marriage, home, emergency fund…"/></Field><Field label="Target amount"><input type="number" min="0" value={form.targetAmount||""} onChange={e=>setField("targetAmount",e.target.value)}/></Field><Field label="Current amount"><input type="number" min="0" value={form.currentAmount||""} onChange={e=>setField("currentAmount",e.target.value)}/></Field><Field label="Target date"><input type="date" value={form.targetDate||""} onChange={e=>setField("targetDate",e.target.value)}/></Field></>}
-    {type==="transaction" && <><Field label="Date"><input type="date" value={form.transactionDate||""} onChange={e=>setField("transactionDate",e.target.value)}/></Field><Field label="Description"><input value={form.description||""} onChange={e=>setField("description",e.target.value)} placeholder="Amazon, salary credit, rent…"/></Field><Field label="Amount"><input type="number" min="0" value={form.amount||""} onChange={e=>setField("amount",e.target.value)}/></Field><Field label="Type"><select value={form.transactionType||"Expense"} onChange={e=>setField("transactionType",e.target.value)}>{["Expense","Income","Credit","Debit"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Category"><div className="inlineInput"><input value={form.category||""} onChange={e=>setField("category",e.target.value)} placeholder="Leave blank for Other"/><button type="button" className="mini" onClick={autoCategorize} disabled={categorizing}>{categorizing?"Thinking…":"Auto-categorize"}</button></div></Field><Field label="Source"><select value={form.source||"Manual"} onChange={e=>setField("source",e.target.value)}>{["Manual","Imported","Bank", "Card", "Other"].map(v=><option key={v}>{v}</option>)}</select></Field></>}
+    {type==="transaction" && <><Field label="Transaction date (month and year)"><input type="date" value={form.transactionDate||""} onChange={e=>setField("transactionDate",e.target.value)}/></Field><Field label="Description"><input value={form.description||""} onChange={e=>setField("description",e.target.value)} placeholder="Amazon, salary credit, rent…"/></Field><Field label="Amount"><input type="number" min="0" value={form.amount||""} onChange={e=>setField("amount",e.target.value)}/></Field><Field label="Type"><select value={form.transactionType||"Expense"} onChange={e=>setField("transactionType",e.target.value)}>{["Expense","Income","Credit","Debit"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Category"><div className="inlineInput"><input value={form.category||""} onChange={e=>setField("category",e.target.value)} placeholder="Leave blank for Other"/><button type="button" className="mini" onClick={autoCategorize} disabled={categorizing}>{categorizing?"Thinking…":"Auto-categorize"}</button></div></Field><Field label="Source"><select value={form.source||"Manual"} onChange={e=>setField("source",e.target.value)}>{["Manual","Imported","Bank", "Card", "Other"].map(v=><option key={v}>{v}</option>)}</select></Field></>}
   </div></Modal>
 }

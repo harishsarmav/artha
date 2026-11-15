@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Artha Compass — Personal finance & planning",
+  title: "Dhanive — Personal finance & planning",
   description: "A thoughtful personal finance and life planning workspace.",
 };
 
