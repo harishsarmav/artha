@@ -22,24 +22,58 @@ export default function ReleaseNotesPage() {
   return (
     <main className="releasePage">
       <header className="releaseHeader">
-        <Link className="releaseBrand" href="/" aria-label="DhanView home"><span aria-hidden="true">✦</span> DhanView</Link>
-        <Link className="releaseBack" href="/">Back to DhanView <span aria-hidden="true">↗</span></Link>
+        <Link className="releaseBrand" href="/" aria-label="FinBuddy home"><span aria-hidden="true">✦</span> FinBuddy</Link>
+        <Link className="releaseBack" href="/">Back to FinBuddy <span aria-hidden="true">↗</span></Link>
       </header>
 
       <section className="releaseHero" aria-labelledby="release-title">
         <p className="eyebrow">A CLEAR RECORD OF WHAT&apos;S NEW</p>
         <h1 id="release-title">Release notes</h1>
-        <p>Updates to your financial workspace, planning tools, and the way DhanView helps you make sense of your money.</p>
+        <p>Updates to your financial workspace, planning tools, and the way FinBuddy helps you make sense of your money.</p>
       </section>
 
-      <section className="releaseList" aria-label="DhanView product updates">
+      <section className="releaseList" aria-label="FinBuddy product updates">
+        <article className="releaseEntry releaseLatest">
+          <div className="releaseMeta"><time dateTime="2026-11-24">24 November 2026</time><span>FinBuddy AI Coach</span></div>
+          <h2>A focused workspace for money conversations</h2>
+          <p className="releaseSummary">The AI Coach now opens as its own focused screen, keeping the main dashboard uncluttered while giving your conversation room to breathe.</p>
+          <ul>
+            <li>Compact cash-flow summaries, an outflow donut chart, and expense category bars sit beside the chat.</li>
+            <li>Reports are calculated from your saved records by the Financial Engine; they are separate from the AI explanation.</li>
+            <li>Planning shortcuts open the Coach with the relevant question ready to review and send.</li>
+            <li>A compact, collapsible menu keeps all six planning prompts available in the Coach, including during follow-up chats. Selecting one fills the draft without sending it.</li>
+          </ul>
+        </article>
+
+        <article className="releaseEntry releaseLatest">
+          <div className="releaseMeta"><time dateTime="2026-11-24">24 November 2026</time><span>FinBuddy AI Coach</span></div>
+          <h2>Ask follow-up questions in a finance chat</h2>
+          <p className="releaseSummary">The AI Coach now keeps a short conversation in the current page session, so you can ask a follow-up without restating the context.</p>
+          <ul>
+            <li>Recent turns are sent with each question so the configured AI can understand follow-ups; they are not saved to your account and can be cleared with New chat.</li>
+            <li>Engine-calculated cash-flow charts and record tables help explain the figures behind each answer.</li>
+            <li>Visual summaries are generated from saved records by the Financial Engine, separately from AI-generated explanations.</li>
+          </ul>
+        </article>
+
+        <article className="releaseEntry releaseLatest">
+          <div className="releaseMeta"><time dateTime="2026-11-23">23 November 2026</time><span>FinBuddy dashboard</span></div>
+          <h2>A clearer home for your finances</h2>
+          <p className="releaseSummary">The workspace now uses FinBuddy branding, compact navigation, a calmer dashboard palette, and a dedicated place for upcoming financial dates.</p>
+          <ul>
+            <li>Add personal reminders for bill tasks, loan payments, tax dates, insurance, goals, and other items.</li>
+            <li>See saved insurance renewal dates and goal target dates alongside reminders you create.</li>
+            <li>Personal reminders are saved in this browser only; they are not synced to Supabase.</li>
+          </ul>
+        </article>
+
         <article className="releaseEntry releaseLatest">
           <div className="releaseMeta"><time dateTime="2026-11-15">15 November 2026</time><span>AI setup</span></div>
           <h2>Choose the AI gateway for local development</h2>
           <p className="releaseSummary">A configured AI endpoint now works on localhost too. Use the Supabase Edge Function for cloud AI, or point the endpoint to the optional local Ollama gateway.</p>
           <ul>
             <li>Local AI status distinguishes a missing provider key, unavailable Ollama model, and an answer rejected by fact checks.</li>
-            <li>When AI is unavailable or unverified, DhanView labels its deterministic fallback.</li>
+            <li>When AI is unavailable or unverified, FinBuddy labels its deterministic fallback.</li>
           </ul>
         </article>
 
@@ -66,7 +100,7 @@ export default function ReleaseNotesPage() {
         <article className="releaseEntry releaseLatest">
           <div className="releaseMeta"><time dateTime="2026-11-15">15 November 2026</time><span>Accessibility and reliability</span></div>
           <h2>System theme and clearer dark surfaces</h2>
-          <p className="releaseSummary">DhanView follows your device theme by default, with improved text and control contrast across dialogs, alerts, and planning cards.</p>
+          <p className="releaseSummary">FinBuddy follows your device theme by default, with improved text and control contrast across dialogs, alerts, and planning cards.</p>
           <ul>
             <li>AI schema errors now show a database error code and the migration sequence needed to resolve missing fields.</li>
             <li>A safe, additive Supabase migration backfills known legacy loan and insurance values.</li>
@@ -120,7 +154,7 @@ export default function ReleaseNotesPage() {
         <article className="releaseEntry releaseLatest">
           <div className="releaseMeta"><time dateTime="2026-11-15">15 November 2026</time><span>Numbers-first coaching</span></div>
           <h2>AI that explains your plan, not just your prompt</h2>
-          <p className="releaseSummary">DhanView's Financial Engine remains responsible for the calculations; the coach explains what they mean across connected life decisions.</p>
+          <p className="releaseSummary">FinBuddy's Financial Engine remains responsible for the calculations; the coach explains what they mean across connected life decisions.</p>
           <ul>
             <li>Home, car, debt, safety, goals and retirement planning use one financial picture.</li>
             <li>Missing information and assumptions are made visible so guidance can be reviewed instead of taken on trust.</li>
@@ -130,7 +164,7 @@ export default function ReleaseNotesPage() {
         <article className="releaseEntry releaseLatest">
           <div className="releaseMeta"><time dateTime="2026-11-15">15 November 2026</time><span>Privacy and security</span></div>
           <h2>More control over your financial data</h2>
-          <p className="releaseSummary">DhanView makes data sharing more deliberate and keeps the dark theme close to black.</p>
+          <p className="releaseSummary">FinBuddy makes data sharing more deliberate and keeps the dark theme close to black.</p>
           <ul>
             <li>Older browser data stays on this device unless you choose to import it into your account.</li>
             <li>AI analysis uses only the account fields needed for calculations; transaction descriptions are not included.</li>
@@ -140,8 +174,8 @@ export default function ReleaseNotesPage() {
 
         <article className="releaseEntry releaseLatest">
           <div className="releaseMeta"><time dateTime="2026-11-15">15 November 2026</time><span>Brand update</span></div>
-          <h2>Dhanive is now DhanView</h2>
-          <p className="releaseSummary">The dashboard, sign-in pages, AI coach, and browser title now use DhanView. Your account, financial data, calculations, and Supabase integration continue to work as before.</p>
+          <h2>Dhanive is now FinBuddy</h2>
+          <p className="releaseSummary">The dashboard, sign-in pages, AI coach, and browser title now use FinBuddy. Your account, financial data, calculations, and Supabase integration continue to work as before.</p>
           <ul>
             <li>The npm package name now matches the product name.</li>
             <li>Existing deployment paths, Supabase function names, and saved browser data keys remain unchanged.</li>
@@ -154,7 +188,7 @@ export default function ReleaseNotesPage() {
           <p className="releaseSummary">Profile changes now save through one account-owned upsert, including accounts whose profile row was not created at signup.</p>
           <ul>
             <li>Profile updates remain scoped to the signed-in user.</li>
-            <li>If Supabase blocks a save, DhanView shows a safe error code and the next step without displaying entered values.</li>
+            <li>If Supabase blocks a save, FinBuddy shows a safe error code and the next step without displaying entered values.</li>
             <li>Profile changes continue to follow the account&apos;s existing Supabase access policies.</li>
             <li>Authentication network failures show retry guidance instead of an unhandled Next.js error overlay.</li>
           </ul>
@@ -163,7 +197,7 @@ export default function ReleaseNotesPage() {
         <article className="releaseEntry">
           <div className="releaseMeta"><time dateTime="2026-11-06">6 November 2026</time><span>Planning defaults</span></div>
           <h2>Calculations start with your information</h2>
-          <p className="releaseSummary">DhanView no longer fills in personal planning assumptions or a sample savings amount for you.</p>
+          <p className="releaseSummary">FinBuddy no longer fills in personal planning assumptions or a sample savings amount for you.</p>
           <ul>
             <li>Age, risk profile, investment horizon, and primary goal stay unset until you provide them.</li>
             <li>Dashboard health and cash-flow views show what information is missing instead of presenting zero-based results as financial conclusions.</li>
@@ -174,29 +208,29 @@ export default function ReleaseNotesPage() {
 
         <article className="releaseEntry">
           <div className="releaseMeta"><time dateTime="2026-09-30">30 September 2026</time><span>Visual refresh</span></div>
-          <h2>A calmer, clearer DhanView</h2>
+          <h2>A calmer, clearer FinBuddy</h2>
           <p className="releaseSummary">A visual refresh focused on trust, readability, and everyday use.</p>
           <ul>
-            <li>Updated the dashboard, navigation, cards, charts, and forms around DhanView&apos;s deep teal, soft green, and warm ivory palette.</li>
+            <li>Updated the dashboard, navigation, cards, charts, and forms around FinBuddy&apos;s deep teal, soft green, and warm ivory palette.</li>
             <li>Added a light and dark theme control. Your choice is saved in this browser as a display preference.</li>
             <li>Improved small-screen layouts, keyboard focus visibility, and reduced-motion support.</li>
           </ul>
         </article>
 
         <article className="releaseEntry">
-          <div className="releaseMeta"><span>DhanView v0.7</span><span>Planning foundation</span></div>
+          <div className="releaseMeta"><span>FinBuddy v0.7</span><span>Planning foundation</span></div>
           <h2>Plan around the decisions that matter</h2>
-          <p className="releaseSummary">A planning hub connects common life decisions to DhanView&apos;s existing financial picture.</p>
+          <p className="releaseSummary">A planning hub connects common life decisions to FinBuddy&apos;s existing financial picture.</p>
           <ul>
             <li>Explore Home, Car, Goals, Debt, Financial Safety, and Retirement planning from one place.</li>
             <li>Move from a planning prompt to the existing AI Coach, with missing details and assumptions called out.</li>
-            <li>Keep financial calculations in DhanView&apos;s deterministic engine and account data in the existing Supabase-backed workspace.</li>
+            <li>Keep financial calculations in FinBuddy&apos;s deterministic engine and account data in the existing Supabase-backed workspace.</li>
           </ul>
         </article>
       </section>
 
-      <p className="releasePrivacy">DhanView release notes describe product changes only. They do not access or display your financial records.</p>
-      <footer className="releaseFooter"><span>DhanView · Personal finance &amp; planning</span><Link href="/auth/">Sign in or create an account</Link></footer>
+      <p className="releasePrivacy">FinBuddy release notes describe product changes only. They do not access or display your financial records.</p>
+      <footer className="releaseFooter"><span>FinBuddy · Personal finance &amp; planning</span><Link href="/auth/">Sign in or create an account</Link></footer>
     </main>
   );
 }

@@ -114,7 +114,7 @@ export function TransactionCsvImport({ onImport }: Props) {
       <section className="importDialog" role="dialog" aria-modal="true" aria-labelledby="csv-import-title">
         <header className="importDialogHead"><div><div className="eyebrow">PRIVATE BY DESIGN</div><h2 id="csv-import-title">Import transactions from CSV</h2></div><button className="iconClose" type="button" onClick={reset} disabled={busy} aria-label="Close import">×</button></header>
         <div className="importDialogBody">
-          <p className="importPrivacy">Your file is read in this browser. It is not uploaded or sent to AI. Review the preview before saving entries to your DhanView account.</p>
+          <p className="importPrivacy">Your file is read in this browser. It is not uploaded or sent to AI. Review the preview before saving entries to your FinBuddy account.</p>
           <label className="importDrop"><strong>Choose a CSV file</strong><span>Bank or card statement · maximum 5 MB and 3,000 rows</span><input ref={inputRef} type="file" accept=".csv,text/csv" onChange={(event) => { const selectedFile = event.target.files?.[0]; event.target.value = ""; void onFile(selectedFile); }}/></label>
           {error && <div className="error" role="alert">{error}</div>}
           {notice && <div className="importNotice" role="status">{notice}</div>}

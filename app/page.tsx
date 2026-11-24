@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
@@ -19,12 +19,31 @@ type Loan = { id: string; name: string; type: string; originalAmount: number; ou
 type Insurance = { id: string; type: string; provider: string; coverage: number; premium: number; frequency: string; renewalDate: string | null };
 type Goal = { id: string; name: string; targetAmount: number; currentAmount: number; targetDate: string };
 type Transaction = { id: string; transactionDate: string; description: string; amount: number; transactionType: string; category: string; source: string };
+type Reminder = { id: string; title: string; dueDate: string; category: string; completed: boolean };
+type CoachChatMessage = { id: string; role: "user" | "assistant"; content: string; grounding?: string; question?: string };
 
 type FormState = Record<string, string | number>;
 type ModalType = "profile" | "security" | "income" | "expense" | "investment" | "loan" | "insurance" | "goal" | "transaction" | "scenario" | "";
 
 const money = (n: number) => `₹${Math.round(Number(n) || 0).toLocaleString("en-IN")}`;
 const numberValue = (v: string | number | null | undefined) => Number(v) || 0;
+function estimatePayoff(principal: number, annualRate: number, payment: number) {
+  if (principal <= 0 || annualRate <= 0 || payment <= 0) return null;
+  const monthlyRate = annualRate / 1200;
+  if (payment <= principal * monthlyRate) return null;
+  let balance = principal;
+  let interestTotal = 0;
+  let months = 0;
+  while (balance > 0.5 && months < 1200) {
+    const interest = balance * monthlyRate;
+    const paid = Math.min(payment, balance + interest);
+    if (paid <= interest) return null;
+    interestTotal += interest;
+    balance = Math.max(0, balance - (paid - interest));
+    months += 1;
+  }
+  return balance <= 0.5 ? { months, interest: Math.round(interestTotal) } : null;
+}
 const profileDefaults: Omit<Profile, "id"> = { name: "", age: 0, dependents: 0, country: "", riskProfile: "", investmentHorizon: "", primaryGoal: "", lifeCover: 0, healthCover: 0, cashSavings: 0 };
 const frequencies = ["Monthly", "Weekly", "Quarterly", "Half-yearly", "Yearly"];
 const incomeTypes = ["Salary", "Rental", "Freelance", "Business", "Interest", "Dividend", "Pension", "Capital gains", "Other"];
@@ -35,6 +54,14 @@ const loanTypes = ["Home Loan", "Car Loan", "Personal Loan", "Education Loan", "
 const insuranceTypes = ["Life / Term", "Health", "Personal Accident", "Other"];
 const goalTypes = ["Emergency fund", "Marriage", "Home", "Education", "Vehicle", "Retirement", "Travel", "Other"];
 const planningBackgrounds = ["home.webp", "car.webp", "goals.webp", "debt.webp", "safety.webp", "retirement.webp"];
+const planningPrompts: [string, string, string, string][] = [
+  ["⌂", "Home planning", "Explore a home budget, down payment, EMI and affordability.", "Help me plan a home purchase. Assess an appropriate property budget, down payment, loan amount, EMI, upfront costs and the impact on my cash flow, emergency fund and other goals. Ask me for any missing information."],
+  ["▣", "Car planning", "Compare purchase price, EMI and total ownership cost.", "Help me plan a car purchase. Evaluate on-road price, down payment, loan EMI, fuel, insurance, maintenance and total ownership cost. Check the impact on my savings, emergency fund and other goals. Ask for missing information."],
+  ["◎", "Goal planning", "Turn a target amount and timeline into a savings plan.", "Help me create a goal-based savings plan. Review my existing goals and portfolio, calculate the monthly contribution needed for a target and timeline, and explain assumptions and trade-offs. Ask me for missing information."],
+  ["⇄", "Debt planning", "Prioritise repayments and compare prepayment scenarios.", "Review my debts and help me build a repayment strategy. Compare avalanche and snowball approaches, EMI changes and prepayment scenarios using my actual loan data. Explain any assumptions and ask for missing information."],
+  ["◇", "Financial safety", "Review emergency savings, insurance and cash-flow resilience.", "Run a financial safety review using my FinBuddy data. Assess emergency fund coverage, debt exposure, insurance information and cash-flow resilience. Identify missing information and prioritise practical next steps."],
+  ["↗", "Retirement planning", "Estimate your future needs and long-term savings gap.", "Help me plan for retirement. Estimate inflation-adjusted future expenses and the savings gap using my age, existing investments and goals where available. Clearly label assumptions and ask for missing information."],
+];
 const LOCAL_AI_ENDPOINT = "http://localhost:8787/api/coach";
 function getAiTarget() {
   const configuredEndpoint = process.env.NEXT_PUBLIC_AI_ENDPOINT?.trim();
@@ -60,19 +87,79 @@ function profileSaveErrorMessage(error: unknown) {
     : "Profile not saved. Check your connection and Supabase profile access, then try again.";
 }
 function recordSaveErrorMessage(error: unknown, record: string) {
-  const code = typeof error === "object" && error !== null && "code" in error
-    ? String((error as { code?: unknown }).code || "")
-    : "";
+  const details = error && typeof error === "object"
+    ? error as { code?: unknown; message?: unknown; details?: unknown; hint?: unknown }
+    : {};
+  const code = String(details.code || "");
+  const diagnostic = [details.message, details.details, details.hint]
+    .filter((part): part is string => typeof part === "string")
+    .join(" ");
   if (code === "42501") return `${record} was not saved: your account does not have permission to write this record. Check the Supabase owner policies. (42501)`;
-  if (code === "PGRST204" || code === "PGRST205") return `${record} was not saved: Supabase is missing a required table or column. Apply the current schema migrations and refresh the API schema cache. (${code})`;
-  if (code === "23502" || code === "23503" || code === "23505" || code === "23514") return `${record} was not saved because the submitted fields do not match a database requirement. Review the fields and schema. (${code})`;
+  if (code === "PGRST204") {
+    const missingColumn = diagnostic.match(/Could not find the ['"]([^'"]+)['"] column of ['"]([^'"]+)['"]/i);
+    if (missingColumn) {
+      return `${record} was not saved: Supabase's API schema cannot find the "${missingColumn[1]}" column in "${missingColumn[2]}". Run supabase/migrations/005_financial_record_schema_alignment.sql in your project's SQL Editor, then retry. (PGRST204)`;
+    }
+    return `${record} was not saved: Supabase's API schema is missing a required column. Run supabase/migrations/005_financial_record_schema_alignment.sql in your project's SQL Editor, then retry. (PGRST204)`;
+  }
+  if (code === "PGRST205") return `${record} was not saved: Supabase's API schema cannot find the required table. Check the project and table migrations, then retry. (PGRST205)`;
+  if (code === "23502") {
+    const requiredColumn = diagnostic.match(/null value in column ['"]([^'"]+)['"] of relation ['"]([^'"]+)['"] violates not-null constraint/i);
+    if (requiredColumn) {
+      return `${record} was not saved: the database still requires "${requiredColumn[1]}" on "${requiredColumn[2]}", a field this form no longer submits. Run supabase/migrations/005_financial_record_schema_alignment.sql in your project's SQL Editor, then retry. (23502)`;
+    }
+    return `${record} was not saved because the database requires a value that this form did not provide. Check the database schema and retry. (23502)`;
+  }
+  if (code === "23503" || code === "23505" || code === "23514") return `${record} was not saved because the database rejected a required relationship or value. Review the form and schema, then retry. (${code})`;
   if (code) return `${record} was not saved. Check your connection and Supabase schema, then try again. (${code})`;
   return `${record} was not saved. Check your connection and sign-in, then try again.`;
 }
 function mapRows<T extends Record<string, any>>(rows: T[] | null) { return (rows ?? []).map((row) => ({ ...row })); }
-function todayLocalDate() { const date = new Date(); date.setMinutes(date.getMinutes() - date.getTimezoneOffset()); return date.toISOString().slice(0, 10); }
+function todayLocalDate(value = new Date()) { const date = new Date(value); date.setMinutes(date.getMinutes() - date.getTimezoneOffset()); return date.toISOString().slice(0, 10); }
 
-function AiResponse({ answer, grounding }: { answer: string; grounding: string }) {
+function CoachDataVisual({ question, financials, loans, investments, goals, insurance }: { question: string; financials: any; loans: Loan[]; investments: Investment[]; goals: Goal[]; insurance: Insurance[] }) {
+  const q = question.toLowerCase();
+  const table = (headers: string[], rows: (string | React.ReactNode)[][]) => <div className="coachVizTableWrap"><table className="coachVizTable"><thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index}>{row.map((cell, column) => <td key={column}>{cell}</td>)}</tr>)}</tbody></table></div>;
+  const bar = (label: string, value: number, max: number, tone: string) => <div className="coachVizBar" key={label}><div><span>{label}</span><b>{money(value)}</b></div><div className="coachVizTrack"><i className={tone} style={{ width: `${Math.max(value > 0 ? 2 : 0, Math.min(100, max > 0 ? value / max * 100 : 0))}%` }} /></div></div>;
+
+  if (/loan|debt|emi|avalanche|snowball|prepay/.test(q)) {
+    if (!loans.length) return null;
+    const payoff = loans.length === 1 && financials.freeCashFlow > 0
+      ? estimatePayoff(loans[0].outstanding, loans[0].interestRate, loans[0].emi + financials.freeCashFlow)
+      : null;
+    return <section className="coachViz" aria-label="Recorded loan summary"><div className="coachVizHeading"><b>Loan snapshot</b><span>From your saved records</span></div>{table(["Loan", "Balance", "Rate", "Monthly EMI", "Term"], loans.map((loan) => [loan.name || loan.type, money(loan.outstanding), loan.interestRate > 0 ? `${loan.interestRate}%` : "Not recorded", money(loan.emi), loan.tenureMonths > 0 ? `${loan.tenureMonths} mo` : "Not recorded"]))}{payoff && <><div className="coachVizHeading"><b>Illustrative payoff timing</b><span>Assumes all current surplus goes to extra principal</span></div><div className="coachVizBars">{bar("Scheduled EMI only", estimatePayoff(loans[0].outstanding, loans[0].interestRate, loans[0].emi)?.months || 0, loans[0].tenureMonths || 1, "")}{bar("EMI + full free cash flow", payoff.months, Math.max(loans[0].tenureMonths || 0, payoff.months), "isAccent")}</div><small>Illustration assumes the rate stays fixed, no lender fees, extra payments reduce principal, and EMI stays unchanged. Confirm lender terms.</small></>}</section>;
+  }
+  if (/goal|saving for|save for|funding/.test(q) && goals.length) {
+    const rows = financials.goals.map((goal: any) => [goal.name, money(goal.targetAmount), money(goal.currentAmount), money(goal.remaining), `${Math.round(goal.progress)}%`, money(goal.requiredMonthlyContribution)]);
+    return <section className="coachViz" aria-label="Financial goals summary"><div className="coachVizHeading"><b>Goal progress</b><span>Calculated from saved targets and dates</span></div>{table(["Goal", "Target", "Saved", "Left", "Progress", "Monthly plan"], rows)}</section>;
+  }
+  if (/invest|portfolio|sip|asset/.test(q) && investments.length) {
+    const groups = Object.entries(financials.assetAllocation || {}).sort((a: any, b: any) => Number(b[1]) - Number(a[1]));
+    return <section className="coachViz" aria-label="Investment summary"><div className="coachVizHeading"><b>Investment mix</b><span>Current value by recorded asset category</span></div>{table(["Category", "Current value", "Monthly contribution"], groups.map(([category, value]: any) => [category, money(Number(value)), money(investments.filter((item) => (item.category || "Other") === category).reduce((sum, item) => sum + item.monthlyAmount, 0))]))}</section>;
+  }
+  if (/insurance|health cover|life cover|protection/.test(q) && insurance.length) {
+    return <section className="coachViz" aria-label="Insurance records"><div className="coachVizHeading"><b>Recorded protection</b><span>Coverage and premiums you entered</span></div>{table(["Policy", "Provider", "Coverage", "Premium", "Frequency"], insurance.map((policy) => [policy.type, policy.provider || "Not recorded", money(policy.coverage), money(policy.premium), policy.frequency || "Not recorded"]))}</section>;
+  }
+  if (/emergency|safety|reserve|cash buffer|protection/.test(q)) {
+    const target3 = Number(financials.emergencyFundTarget3Months) || 0;
+    const target6 = Number(financials.emergencyFundTarget6Months) || 0;
+    const saved = Number(financials.cashSavings) || 0;
+    if (!(target3 || target6 || saved)) return null;
+    const rows = [["Recorded cash savings", money(saved), "—"], ["3-month reserve target", money(target3), `${target3 > 0 ? Math.min(100, Math.round(saved / target3 * 100)) : 0}% funded`], ["6-month reserve target", money(target6), `${target6 > 0 ? Math.min(100, Math.round(saved / target6 * 100)) : 0}% funded`]];
+    return <section className="coachViz" aria-label="Emergency reserve summary"><div className="coachVizHeading"><b>Cash reserve progress</b><span>Targets use essential expenses and debt payments</span></div>{table(["Measure", "Amount", "Progress"], rows)}</section>;
+  }
+
+  const items = [
+    ["Living expenses", Number(financials.livingExpenses) || 0],
+    ["Debt payments", Number(financials.debtPayments) || 0],
+    ["Investment contributions", Number(financials.investmentContributions) || 0],
+  ] as const;
+  const monthlyOutflow = Number(financials.monthlyOutflow) || 0;
+  if (!(financials.monthlyIncome > 0 || monthlyOutflow > 0)) return null;
+  return <section className="coachViz" aria-label="Monthly cash flow breakdown"><div className="coachVizHeading"><b>Monthly cash flow</b><span>Calculated from your saved entries</span></div><div className="coachVizMetrics"><div><span>Income</span><b>{money(financials.monthlyIncome)}</b></div><div><span>Outflow</span><b>{money(monthlyOutflow)}</b></div><div><span>Left over</span><b className={financials.freeCashFlow < 0 ? "isNegative" : "isPositive"}>{money(financials.freeCashFlow)}</b></div><div><span>Savings rate</span><b>{Number(financials.savingsRate || 0).toFixed(1)}%</b></div></div><div className="coachVizBars">{items.map(([label, value]) => bar(label, value, Math.max(...items.map((item) => item[1]), 1), ""))}</div>{table(["Monthly flow", "Amount", "% of income"], [...items.map(([label, value]) => [label, money(value), `${financials.monthlyIncome > 0 ? (value / financials.monthlyIncome * 100).toFixed(1) : "0.0"}%`]), ["Free cash flow", money(financials.freeCashFlow), `${Number(financials.savingsRate || 0).toFixed(1)}%`]])}<small>Free cash flow is what remains after recorded living expenses, debt payments, and investment contributions. It is not a forecast.</small></section>;
+}
+
+function AiResponse({ answer, grounding, question, financials, loans, investments, goals, insurance }: { answer: string; grounding: string; question?: string; financials?: any; loans?: Loan[]; investments?: Investment[]; goals?: Goal[]; insurance?: Insurance[] }) {
   const [copyStatus, setCopyStatus] = useState("");
   const copyResponse = async () => {
     try {
@@ -84,12 +171,78 @@ function AiResponse({ answer, grounding }: { answer: string; grounding: string }
   };
   return <div className="output">
     <div className="outputHeader">
-      <div><div className="outputTitle">DhanView says</div><small className="outputGrounding">{grounding}</small></div>
+      <div><div className="outputTitle">FinBuddy says</div><small className="outputGrounding">{grounding}</small></div>
       <button className="mini" type="button" onClick={() => void copyResponse()}>Copy response</button>
     </div>
     <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></div>
+    {question && financials && <CoachDataVisual question={question} financials={financials} loans={loans || []} investments={investments || []} goals={goals || []} insurance={insurance || []} />}
     <small className="copyStatus" role="status" aria-live="polite">{copyStatus}</small>
   </div>;
+}
+
+function CoachChat({ messages, question, onQuestionChange, onSend, onReview, onNewChat, isLoading, error, financials, loans, investments, goals, insurance, showVisuals = true }: {
+  messages: CoachChatMessage[]; question: string; onQuestionChange: (value: string) => void; onSend: () => void; onReview: () => void; onNewChat: () => void;
+  isLoading: boolean; error: string; financials: any; loans: Loan[]; investments: Investment[]; goals: Goal[]; insurance: Insurance[]; showVisuals?: boolean;
+}) {
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" }); }, [messages.length, isLoading]);
+  return <div className="coachChat">
+    {messages.length === 0 ? <div className="coachWelcome">
+      <div className="coachWelcomeCopy"><span className="chatStatusDot" /> <b>Your money, made clearer</b><p>Ask a question, then follow up naturally. FinBuddy uses your saved entries to explain the numbers and show what they mean.</p></div>
+      {showVisuals && <CoachDataVisual question="financial overview" financials={financials} loans={loans} investments={investments} goals={goals} insurance={insurance} />}
+      <div className="prompts chatStarterPrompts">{prompts.slice(0, 4).map(([icon, title, text]) => <button className="prompt" key={title} type="button" onClick={() => onQuestionChange(text)}><em aria-hidden="true">{icon}</em><strong>{title}</strong></button>)}</div>
+      <button className="secondary chatReviewButton" type="button" disabled={isLoading} onClick={onReview}>Review my financial picture</button>
+    </div> : <>
+      <div className="chatTranscriptHead"><div><b>Conversation</b><span>Recent messages stay in this page session.</span></div><button className="mini" type="button" onClick={onNewChat}>New chat</button></div>
+      <div className="chatTranscript" ref={transcriptRef} role="log" aria-live="polite" aria-label="FinBuddy conversation">
+        {messages.map((message) => message.role === "user"
+          ? <div className="chatUserRow" key={message.id}><span className="chatAvatar userAvatar" aria-hidden="true">You</span><div className="chatUserBubble">{message.content}</div></div>
+          : <div className="chatAssistantRow" key={message.id}><span className="chatAvatar assistantAvatar" aria-hidden="true">✦</span><div className="chatAssistantContent"><AiResponse answer={message.content} grounding={message.grounding || "Financial guidance"} question={showVisuals ? message.question : undefined} financials={financials} loans={loans} investments={investments} goals={goals} insurance={insurance} /></div></div>)}
+        {isLoading && <div className="chatAssistantRow"><span className="chatAvatar assistantAvatar" aria-hidden="true">✦</span><div className="chatThinking" role="status">FinBuddy is reviewing your numbers<span aria-hidden="true">…</span></div></div>}
+      </div>
+    </>}
+    <details className="coachPlanningPrompts">
+      <summary><span><b>Plan a decision</b><small>Home, car, goals, debt, safety, or retirement</small></span><span className="coachPlanningChevron" aria-hidden="true">⌄</span></summary>
+      <div className="coachPlanningGrid">{planningPrompts.map(([icon, title, description, text]) => <button key={title} type="button" onClick={() => onQuestionChange(text)}><span aria-hidden="true">{icon}</span><span><b>{title}</b><small>{description}</small></span></button>)}</div>
+    </details>
+    <form className="chatComposer" onSubmit={(event) => { event.preventDefault(); if (!isLoading) onSend(); }}>
+      <label className="srOnly" htmlFor="coach-question">Ask FinBuddy a follow-up</label>
+      <textarea id="coach-question" value={question} onChange={(event) => onQuestionChange(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); if (!isLoading) onSend(); } }} placeholder="Ask about your cash flow, a goal, or what to do next…" rows={3} />
+      <div className="chatComposerFooter"><small>Enter a follow-up any time · Ctrl+Enter / Cmd+Enter to send</small><button className="primary" type="submit" disabled={isLoading || !question.trim()}>{isLoading ? "Thinking…" : "Send question ↑"}</button></div>
+      {error && <div className="chatError" role="alert">{error}</div>}
+    </form>
+    <small className="chatPrivacyNote">This chat is kept in memory for this page session so follow-up questions have context. It is not saved to your account. Recent turns are sent with each question to the configured AI provider; you can clear them with New chat.</small>
+  </div>;
+}
+
+function CoachReports({ financials, spendingByCategory, hasRecords }: { financials: any; spendingByCategory: [string, number][]; hasRecords: boolean }) {
+  const slices = [
+    { label: "Living expenses", value: Math.max(0, Number(financials.livingExpenses) || 0), color: "#16836f" },
+    { label: "Debt payments", value: Math.max(0, Number(financials.debtPayments) || 0), color: "#efad43" },
+    { label: "Investments", value: Math.max(0, Number(financials.investmentContributions) || 0), color: "#6b85c7" },
+  ];
+  const total = slices.reduce((sum, item) => sum + item.value, 0);
+  let cursor = 0;
+  const pie = total > 0 ? slices.map((item) => {
+    const start = cursor;
+    cursor += item.value / total * 100;
+    return `${item.color} ${start}% ${cursor}%`;
+  }).join(", ") : "#e3e8e5 0% 100%";
+  const maxCategory = Math.max(1, ...spendingByCategory.slice(0, 5).map(([, value]) => value));
+  return <aside className="coachReports" aria-label="Financial reports">
+    <div className="coachReportHeader"><div><span className="eyebrow">YOUR NUMBERS</span><h2>Quick reports</h2></div><span className="reportSource">Financial Engine</span></div>
+    <div className="coachReportMetrics">
+      <div><span>Monthly income</span><b>{financials.monthlyIncome > 0 ? money(financials.monthlyIncome) : "—"}</b></div>
+      <div><span>Monthly outflow</span><b>{financials.monthlyOutflow > 0 ? money(financials.monthlyOutflow) : "—"}</b></div>
+      <div><span>Free cash flow</span><b className={financials.freeCashFlow < 0 ? "isNegative" : "isPositive"}>{hasRecords ? money(financials.freeCashFlow) : "—"}</b></div>
+      <div><span>Savings rate</span><b>{financials.monthlyIncome > 0 ? `${Number(financials.savingsRate || 0).toFixed(1)}%` : "—"}</b></div>
+      <div><span>Investments</span><b>{financials.currentInvestmentValue > 0 ? money(financials.currentInvestmentValue) : "—"}</b></div>
+      <div><span>Outstanding debt</span><b>{financials.outstandingDebt > 0 ? money(financials.outstandingDebt) : "—"}</b></div>
+    </div>
+    <section className="coachReportCard"><div className="coachReportTitle"><b>Where your monthly outflow goes</b><span>{total > 0 ? money(total) : "—"}</span></div>{total > 0 ? <div className="coachPieWrap"><div className="coachPie" style={{ background: `conic-gradient(${pie})` }} role="img" aria-label={`Monthly outflow mix: ${slices.map((item) => `${item.label} ${money(item.value)}`).join(", ")}`}><span><b>{money(total)}</b><small>per month</small></span></div><div className="coachPieLegend">{slices.filter((item) => item.value > 0).map((item) => <div key={item.label}><i style={{ background: item.color }} /><span>{item.label}</span><b>{money(item.value)}</b></div>)}</div></div> : <p className="coachReportEmpty">Add income or spending records to see the monthly outflow mix.</p>}</section>
+    <section className="coachReportCard"><div className="coachReportTitle"><b>Expense categories</b><span>Monthly plan</span></div>{spendingByCategory.length ? <div className="coachCategoryBars">{spendingByCategory.slice(0, 5).map(([category, value]) => <div className="coachCategoryBar" key={category}><div><span>{category}</span><b>{money(value)}</b></div><div className="coachCategoryTrack"><i style={{ width: `${Math.max(2, value / maxCategory * 100)}%` }} /></div></div>)}</div> : <p className="coachReportEmpty">Add recurring expenses to see category comparisons.</p>}</section>
+    <small className="coachReportFootnote">Amounts are calculated from saved records. The AI explains them; it does not create the chart values.</small>
+  </aside>;
 }
 
 export default function Home() {
@@ -103,6 +256,7 @@ export default function Home() {
   const [profileMenu, setProfileMenu] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [themeMode, setThemeMode] = useState<"system" | "light" | "dark">("system");
+  const [coachStandalone, setCoachStandalone] = useState(false);
   const [modal, setModal] = useState<ModalType>("");
   const [edit, setEdit] = useState<any>(null);
   const [form, setForm] = useState<FormState>({});
@@ -126,6 +280,12 @@ export default function Home() {
   const [insurance, setInsurance] = useState<Insurance[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [remindersReadyFor, setRemindersReadyFor] = useState("");
+  const [showReminderForm, setShowReminderForm] = useState(false);
+  const [reminderTitle, setReminderTitle] = useState("");
+  const [reminderDate, setReminderDate] = useState(todayLocalDate());
+  const [reminderCategory, setReminderCategory] = useState("Bill payment");
   const [spendingYear, setSpendingYear] = useState(new Date().getFullYear());
   const [spendingMonth, setSpendingMonth] = useState("all");
   const [yearTransactions, setYearTransactions] = useState<Transaction[]>([]);
@@ -134,6 +294,8 @@ export default function Home() {
   const [yearTransactionsTruncated, setYearTransactionsTruncated] = useState(false);
   const [yearTransactionsReload, setYearTransactionsReload] = useState(0);
   const [question, setQuestion] = useState("");
+  const [chatMessages, setChatMessages] = useState<CoachChatMessage[]>([]);
+  const [coachError, setCoachError] = useState("");
   const [answer, setAnswer] = useState("");
   const [answerGrounding, setAnswerGrounding] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
@@ -151,6 +313,29 @@ export default function Home() {
     setTheme(initialTheme);
     document.documentElement.dataset.theme = initialTheme;
   }, []);
+
+  useEffect(() => {
+    const syncCoachView = () => setCoachStandalone(new URLSearchParams(window.location.search).get("view") === "coach");
+    syncCoachView();
+    window.addEventListener("popstate", syncCoachView);
+    return () => window.removeEventListener("popstate", syncCoachView);
+  }, []);
+
+  useEffect(() => {
+    if (!profile.id) { setReminders([]); setRemindersReadyFor(""); return; }
+    try {
+      const stored = window.localStorage.getItem(`finbuddy-reminders:${profile.id}`);
+      const parsed = stored ? JSON.parse(stored) : [];
+      setReminders(Array.isArray(parsed) ? parsed.filter((item): item is Reminder => item && typeof item.id === "string" && typeof item.title === "string" && typeof item.dueDate === "string" && typeof item.category === "string" && typeof item.completed === "boolean") : []);
+    } catch { setReminders([]); }
+    setRemindersReadyFor(profile.id);
+  }, [profile.id]);
+
+  useEffect(() => {
+    if (!profile.id || remindersReadyFor !== profile.id) return;
+    try { window.localStorage.setItem(`finbuddy-reminders:${profile.id}`, JSON.stringify(reminders)); }
+    catch { setError("This browser could not save your reminders. Check available device storage and retry."); }
+  }, [profile.id, reminders, remindersReadyFor]);
 
   useEffect(() => {
     if (themeMode !== "system") return;
@@ -184,6 +369,20 @@ export default function Home() {
       if (nextMode === "system") window.localStorage.removeItem("artha-theme");
       else window.localStorage.setItem("artha-theme", nextMode);
     } catch { /* The selected theme still applies for this visit. */ }
+  };
+
+  const openCoachWindow = (nextPrompt?: string) => {
+    if (nextPrompt) setQuestion(nextPrompt);
+    const url = new URL(window.location.href);
+    url.searchParams.set("view", "coach");
+    window.history.pushState({}, "", `${url.pathname}?${url.searchParams.toString()}`);
+    setCoachStandalone(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const closeCoachWindow = () => {
+    window.history.pushState({}, "", window.location.pathname);
+    setCoachStandalone(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const closeModal = () => { setModal(""); setEdit(null); setForm({}); setSecurityPassword(""); setSecurityConfirm(""); };
@@ -281,7 +480,7 @@ export default function Home() {
 
   async function importLegacyData() {
     if (!legacyDataAvailable || !profile.id || legacyImportBusy) return;
-    const approved = window.confirm("Import older Artha data? This copies profile and portfolio records from this browser into your signed-in DhanView Supabase account. Nothing is transferred unless you choose OK. The browser copy will be kept.");
+    const approved = window.confirm("Import older Artha data? This copies profile and portfolio records from this browser into your signed-in FinBuddy Supabase account. Nothing is transferred unless you choose OK. The browser copy will be kept.");
     if (!approved) return;
     const read = (key: string) => { try { return JSON.parse(window.localStorage.getItem(key) || "null"); } catch { return null; } };
     const list = (key: string) => { const value = read(key); return Array.isArray(value) ? value.filter((row) => row && typeof row === "object") : []; };
@@ -413,6 +612,25 @@ export default function Home() {
   const hasFinancialInputs = hasCashFlowInputs || insurance.length > 0 || goals.length > 0 || transactions.length > 0
     || profile.age > 0 || profile.cashSavings > 0 || profile.lifeCover > 0 || profile.healthCover > 0;
 
+  const financialReminderRows = useMemo(() => {
+    const oneYearFromNow = new Date(); oneYearFromNow.setFullYear(oneYearFromNow.getFullYear() + 1);
+    const limit = todayLocalDate(oneYearFromNow);
+    const linked: (Reminder & { source: "manual" | "insurance" | "goal" })[] = [
+      ...reminders.map((item) => ({ ...item, source: "manual" as const })),
+      ...insurance.filter((item) => item.renewalDate && item.renewalDate >= todayLocalDate() && item.renewalDate <= limit).map((item) => ({ id: `insurance-${item.id}`, title: `${item.provider || item.type} renewal`, dueDate: item.renewalDate!, category: "Insurance renewal", completed: false, source: "insurance" as const })),
+      ...goals.filter((item) => item.targetDate && item.targetDate >= todayLocalDate() && item.targetDate <= limit).map((item) => ({ id: `goal-${item.id}`, title: item.name, dueDate: item.targetDate, category: "Goal target", completed: false, source: "goal" as const })),
+    ];
+    return linked.filter((item) => !item.completed).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+  }, [reminders, insurance, goals]);
+
+  function saveReminder(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!profile.id || !reminderTitle.trim() || !reminderDate) return;
+    setReminders((current) => [...current, { id: typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}`, title: reminderTitle.trim().slice(0, 120), dueDate: reminderDate, category: reminderCategory, completed: false }].sort((a, b) => a.dueDate.localeCompare(b.dueDate)));
+    setReminderTitle(""); setReminderDate(todayLocalDate()); setReminderCategory("Bill payment"); setShowReminderForm(false);
+    showToast("Reminder saved on this device.");
+  }
+
   function updateScenarioExtra(value: number) {
     const nextValue = Math.max(0, value);
     setScenarioExtra(nextValue);
@@ -487,7 +705,7 @@ export default function Home() {
   function localFallbackAnswer(nextQuestion: string, mode: "chat" | "review" | "scenario") {
     const f = financials;
     const q = nextQuestion.toLowerCase();
-    const lines = ["### DhanView's engine-based view", ""];
+    const lines = ["### FinBuddy's engine-based view", ""];
 
     if (f.monthlyIncome > 0) {
       lines.push(
@@ -514,15 +732,23 @@ export default function Home() {
       );
     }
 
-    if (/emergency|fund|cash/.test(q)) {
+    const asksAboutDebt = /loan|debt|emi|avalanche|snowball|prepay/.test(q);
+    const asksAboutRetirement = /retirement|retire/.test(q);
+    if (/emergency|fund|cash/.test(q) && !asksAboutDebt) {
       lines.push(
         `Cash savings are **${Math.round(f.cashSavings).toLocaleString("en-IN")}**, while the engine's 3–6 month target range is **${Math.round(f.emergencyFundTarget3Months).toLocaleString("en-IN")}–${Math.round(f.emergencyFundTarget6Months).toLocaleString("en-IN")}**.`
       );
     }
-    if (/invest|sip|stock|mutual|portfolio/.test(q)) {
+    if (/invest|sip|stock|mutual|portfolio/.test(q) && !asksAboutRetirement) {
       lines.push(
         `Tracked investments are worth **${Math.round(f.currentInvestmentValue).toLocaleString("en-IN")}** versus **${Math.round(f.investedAmount).toLocaleString("en-IN")}** invested.`
       );
+    }
+    if (asksAboutRetirement) {
+      lines.push(`You currently track ${money(f.currentInvestmentValue)} in investments and ${money(f.investmentContributions)}/month in contributions. These holdings are not marked as retirement-only in the records.`);
+      lines.push("A retirement corpus or savings gap cannot be estimated reliably yet because your retirement age and desired retirement spending are not recorded. Inflation and return assumptions also need to be chosen rather than guessed.");
+      lines.push("Next, set a target retirement age and a monthly retirement spending amount in today's rupees. Then compare your current investments and contributions with a target using clearly labeled, user-selected scenarios.");
+      lines.push("What target retirement age and monthly spending in today's rupees should I use?");
     }
     if (/loan|debt|emi/.test(q)) {
       lines.push(
@@ -540,16 +766,42 @@ export default function Home() {
           const term = loan.tenureMonths > 0 ? `${loan.tenureMonths} months remaining` : "remaining term not recorded";
           lines.push(`- **${loanLabel}**: ${money(loan.outstanding)} outstanding · ${rate} · ${emi} · ${term}.`);
         });
-        const avalanche = [...openLoans].filter((loan) => loan.interestRate > 0).sort((a, b) => b.interestRate - a.interestRate);
-        const missingRate = openLoans.some((loan) => loan.interestRate <= 0);
-        lines.push(avalanche.length ? `Avalanche order from recorded rates: ${avalanche.map((loan) => loan.name || loan.type || "Loan").join(" → ")}${missingRate ? "; loans without a recorded rate cannot be ranked" : ""}.` : "Avalanche order cannot be ranked because interest rates are not recorded.");
-        const snowball = [...openLoans].sort((a, b) => a.outstanding - b.outstanding);
-        lines.push(`Snowball order by recorded balance: ${snowball.map((loan) => loan.name || loan.type || "Loan").join(" → ")}.`);
+        if (openLoans.length === 1) {
+          lines.push(`You have one open loan, **${openLoans[0].name || openLoans[0].type || "Loan"}**. Avalanche and snowball both select it, so there is no ranking choice between the methods yet.`);
+        } else {
+          const avalanche = [...openLoans].filter((loan) => loan.interestRate > 0).sort((a, b) => b.interestRate - a.interestRate);
+          const missingRate = openLoans.some((loan) => loan.interestRate <= 0);
+          lines.push(avalanche.length ? `Avalanche order from recorded rates: ${avalanche.map((loan) => loan.name || loan.type || "Loan").join(" → ")}${missingRate ? "; loans without a recorded rate cannot be ranked" : ""}.` : "Avalanche order cannot be ranked because interest rates are not recorded.");
+          const snowball = [...openLoans].sort((a, b) => a.outstanding - b.outstanding);
+          lines.push(`Snowball order by recorded balance: ${snowball.map((loan) => loan.name || loan.type || "Loan").join(" → ")}.`);
+        }
       }
-      lines.push("In general, avalanche directs extra payments to the highest-rate loan after paying each loan's minimum EMI; snowball directs them to the smallest balance. These are strategy descriptions, not a prepayment calculation.");
-      lines.push("To compare EMI or prepayment scenarios, provide the extra monthly amount or lump sum, any lender prepayment fees, and whether the lender would reduce the EMI or shorten the term.");
+      if (openLoans.length === 1) {
+        const loan = openLoans[0];
+        const freeCash = Math.max(0, f.freeCashFlow);
+        if (freeCash > 0 && f.emergencyFundTarget3Months > f.cashSavings) {
+          const reserveMonths3 = Math.ceil(Math.max(0, f.emergencyFundTarget3Months - f.cashSavings) / freeCash);
+          const reserveMonths6 = Math.ceil(Math.max(0, f.emergencyFundTarget6Months - f.cashSavings) / freeCash);
+          lines.push(`**Cash-reserve scenario:** savings are ${money(f.cashSavings)} against a 3–6 month target of ${money(f.emergencyFundTarget3Months)}–${money(f.emergencyFundTarget6Months)}. Putting all recorded free cash flow (${money(freeCash)}/month) toward reserves would reach those targets in about **${reserveMonths3} and ${reserveMonths6} months**, respectively, if recorded income and expenses stay unchanged and there are no withdrawals.`);
+        }
+        if (freeCash > 0 && loan.interestRate > 0 && loan.emi > 0) {
+          const currentPlan = estimatePayoff(loan.outstanding, loan.interestRate, loan.emi);
+          const extraPlan = estimatePayoff(loan.outstanding, loan.interestRate, loan.emi + freeCash);
+          if (currentPlan && extraPlan) {
+            const interestSaved = currentPlan.interest - extraPlan.interest;
+            lines.push(`**Illustrative prepayment option:** if the full recorded free cash flow of ${money(freeCash)}/month were paid extra toward principal, the simple model estimates payoff in **${extraPlan.months} months** versus **${currentPlan.months} months** at the recorded EMI, with about **${money(Math.max(0, interestSaved))}** less interest.`);
+            lines.push(`This and the reserve scenario are alternatives for the same surplus. The estimate assumes a fixed ${loan.interestRate}% rate, extra payments reduce principal, EMI stays unchanged, no fees, and all expenses are recorded. Confirm the lender's actual prepayment rules before relying on it.`);
+          }
+        }
+        lines.push("With no cash reserve currently recorded, one option is to keep the scheduled EMI current and split some surplus between reserves and extra principal. Ask the lender about fees and whether prepayment shortens the term or reduces the EMI.");
+        lines.push("Which would you like to model next: reserve first, extra principal, or a split?");
+      } else if (openLoans.length > 1) {
+        lines.push("Avalanche targets the highest recorded rate; snowball targets the smallest recorded balance. Keep each minimum EMI current, then direct any extra amount to the chosen priority loan.");
+        lines.push("To model a multi-loan payoff, decide the extra monthly amount or lump sum and confirm lender fees and whether prepayment reduces EMI or term.");
+      }
     }
-    if (/goal|save more|saving/.test(q)) {
+    const asksAboutGoals = /financial goal|goal funding|goal planning|save more|saving for|save for/.test(q);
+    if (asksAboutGoals && !/loan|debt|emi|avalanche|snowball|prepay/.test(q)) {
       if (f.goals.length) {
         f.goals.slice(0, 5).forEach((g) => {
           lines.push(
@@ -560,7 +812,7 @@ export default function Home() {
         lines.push("You have not added a financial goal yet.");
       }
     }
-    if (/insurance|cover|term|health/.test(q)) {
+    if (/insurance|cover|health/.test(q) && !asksAboutDebt) {
       lines.push(
         `Tracked protection is **${Math.round(f.lifeCover).toLocaleString("en-IN")}** of life/term cover and **${Math.round(f.healthCover).toLocaleString("en-IN")}** of health cover.`
       );
@@ -571,7 +823,7 @@ export default function Home() {
       );
     }
 
-    lines.push("", "This fallback uses DhanView's deterministic engine facts only; no AI inference was used.");
+    lines.push("", "This fallback uses FinBuddy's deterministic engine facts only; no AI inference was used.");
     return lines.join("\n");
   }
 
@@ -959,7 +1211,7 @@ export default function Home() {
       source: "Imported",
     }));
     const { data, error: insertError } = await supabase.from("transactions").insert(payload).select("id");
-    if (insertError) throw new Error("DhanView could not save the imported entries. Nothing from this import was added; please retry.");
+    if (insertError) throw new Error("FinBuddy could not save the imported entries. Nothing from this import was added; please retry.");
     if (!data || data.length !== payload.length) throw new Error("Supabase did not confirm every imported entry. Reload your transaction history before retrying.");
     setYearTransactionsReload((value) => value + 1);
     setTransactions((current) => [...payload.map((row, index) => ({
@@ -984,7 +1236,7 @@ export default function Home() {
   }
 
   async function removeRow(table: string, id: string) {
-    if (!window.confirm("Delete this item from your DhanView account?")) return;
+    if (!window.confirm("Delete this item from your FinBuddy account?")) return;
     const { error } = await supabase.from(table).delete().eq("id", id).eq("user_id", profile.id);
     if (error) { setError("Unable to delete this item. Please try again."); return; }
     if (table === "income") setIncome(v=>v.filter(x=>x.id!==id));
@@ -1005,7 +1257,7 @@ export default function Home() {
     showToast("Deleted.");
   }
 
-  async function askDhanView(
+  async function askFinBuddy(
     nextQuestion = question,
     mode: "chat" | "review" | "scenario" = "chat",
     scenarioPayload: any = undefined
@@ -1015,9 +1267,13 @@ export default function Home() {
       return;
     }
 
+    const history = chatMessages.filter((message) => message.grounding !== "Request failed · no answer generated").slice(-8).map(({ role, content }) => ({ role, content }));
+    const userMessage: CoachChatMessage = { id: `user-${Date.now()}`, role: "user", content: nextQuestion.trim(), question: nextQuestion.trim() };
+    setChatMessages((current) => [...current, userMessage].slice(-40));
+    if (mode === "chat") setQuestion("");
+
     setAiLoading(true);
-    setError("");
-    setAnswer("");
+    setCoachError("");
     setAnswerGrounding("");
 
     const target = getAiTarget();
@@ -1040,8 +1296,10 @@ export default function Home() {
     } : undefined;
 
     if (!target) {
-      setAnswer(localFallbackAnswer(nextQuestion, mode));
+      const fallback = localFallbackAnswer(nextQuestion, mode);
+      setAnswer(fallback);
       setAnswerGrounding("Financial Engine facts only · AI gateway is not configured");
+      setChatMessages((current) => [...current, { id: `assistant-${Date.now()}`, role: "assistant" as const, content: fallback, grounding: "Financial Engine facts only · AI gateway is not configured", question: nextQuestion }].slice(-40));
       showToast("AI gateway is not configured; showing engine-based guidance.");
       setAiLoading(false);
       return;
@@ -1066,6 +1324,7 @@ export default function Home() {
           question: nextQuestion,
           mode,
           scenario: scenarioPayload,
+          history,
           ...(usesLocalGateway ? { financialContext: localFinancialContext } : {}),
         }),
       });
@@ -1087,13 +1346,18 @@ export default function Home() {
       if (data.grounding === "verified" && typeof data.answer === "string" && data.answer.trim()) {
         setAnswer(data.answer);
         setAnswerGrounding("AI answer passed source-reference and number checks");
+        setChatMessages((current) => [...current, { id: `assistant-${Date.now()}`, role: "assistant" as const, content: data.answer, grounding: "AI answer passed source-reference and number checks", question: nextQuestion }].slice(-40));
       } else {
-        setAnswer(localFallbackAnswer(nextQuestion, mode));
+        const fallback = typeof data.answer === "string" && data.answer.trim() ? data.answer : localFallbackAnswer(nextQuestion, mode);
+        setAnswer(fallback);
+        setChatMessages((current) => [...current, { id: `assistant-${Date.now()}`, role: "assistant" as const, content: fallback, grounding: "Financial Engine facts only · no AI inference used", question: nextQuestion }].slice(-40));
         const reason = data.fallbackReason;
         const fallbackLabel = reason === "provider_not_configured"
           ? "AI provider not configured · Financial Engine only"
           : reason === "local_model_unavailable"
             ? "Local AI model unavailable · Financial Engine only"
+            : reason === "provider_temporarily_unavailable" || reason === "provider_rate_limited" || reason === "provider_connection_failed"
+              ? "AI provider temporarily unavailable · Financial Engine only"
             : reason === "answer_not_verified"
               ? "AI answer failed fact checks · Financial Engine only"
               : "AI answer was not verified · Financial Engine only";
@@ -1102,17 +1366,21 @@ export default function Home() {
           ? "AI provider is not configured in Supabase Edge Function secrets; showing engine guidance."
           : reason === "local_model_unavailable"
             ? "Local AI model is unavailable; showing engine guidance."
+            : reason === "provider_temporarily_unavailable" || reason === "provider_rate_limited" || reason === "provider_connection_failed"
+              ? "The AI provider is temporarily unavailable; showing engine guidance."
             : "AI answer could not be verified; showing engine guidance.");
       }
     } catch (err) {
       if (usesLocalGateway) {
-        setAnswer(localFallbackAnswer(nextQuestion, mode));
+        const fallback = localFallbackAnswer(nextQuestion, mode);
+        setAnswer(fallback);
         setAnswerGrounding("Financial Engine facts only · local AI was unavailable");
+        setChatMessages((current) => [...current, { id: `assistant-${Date.now()}`, role: "assistant" as const, content: fallback, grounding: "Financial Engine facts only · local AI was unavailable", question: nextQuestion }].slice(-40));
         showToast("Local AI is unavailable; showing engine-based guidance.");
       } else {
-        setError(
-          err instanceof Error ? err.message : "Unable to get guidance."
-        );
+        const message = err instanceof Error ? err.message : "Unable to get guidance.";
+        setCoachError(message);
+        setChatMessages((current) => [...current, { id: `assistant-${Date.now()}`, role: "assistant" as const, content: `I couldn’t complete that request. ${message}`, grounding: "Request failed · no answer generated", question: nextQuestion }].slice(-40));
       }
     } finally {
       setAiLoading(false);
@@ -1157,7 +1425,7 @@ export default function Home() {
 
       if (!target) {
         setField("category", localCategory);
-        showToast(`DhanView categorized this as ${localCategory}.`);
+        showToast(`FinBuddy categorized this as ${localCategory}.`);
         return;
       }
 
@@ -1197,11 +1465,11 @@ export default function Home() {
 
       const category = data.category || localCategory;
       setField("category", category);
-      showToast(`DhanView categorized this as ${category}.`);
+      showToast(`FinBuddy categorized this as ${category}.`);
     } catch (err) {
       if (typeof window !== "undefined" && window.location.hostname === "localhost") {
         setField("category", localCategory);
-        showToast(`DhanView categorized this as ${localCategory}.`);
+        showToast(`FinBuddy categorized this as ${localCategory}.`);
       } else {
         setError(err instanceof Error ? err.message : "Unable to categorize.");
       }
@@ -1224,59 +1492,49 @@ export default function Home() {
     closeModal(); showToast("Password updated.");
   }
 
-  if (!sessionReady || loadingData) return <div className="loading"><div><div className="loadingMark">✦</div><strong>Loading your DhanView workspace…</strong></div></div>;
+  if (!sessionReady || loadingData) return <div className="loading"><div><div className="loadingMark">✦</div><strong>Loading your FinBuddy workspace…</strong></div></div>;
   if (authConnectionError) return <main className="loading"><div role="alert"><div className="loadingMark">!</div><strong>Can&apos;t reach Supabase</strong><p>Check your internet connection and that this app uses the active Supabase project URL, then retry.</p><button className="primary" type="button" onClick={() => window.location.reload()}>Retry connection</button></div></main>;
+
+  if (coachStandalone) return <main className="coachStandalonePage">
+    <header className="coachStandaloneHeader"><button type="button" className="coachBackButton" onClick={closeCoachWindow}>← <span>Dashboard</span></button><Link className="coachStandaloneBrand" href={process.env.NEXT_PUBLIC_BASE_PATH ? `${process.env.NEXT_PUBLIC_BASE_PATH}/` : "/"}><span aria-hidden="true">✦</span> FinBuddy <small>AI Coach</small></Link><div className="coachStandaloneTools"><span className="coachSignedIn">{profile.name || "Your account"}</span><button className="themeToggle" type="button" onClick={toggleTheme} aria-label={`Theme is ${themeMode}; switch theme`}><span aria-hidden="true">{themeMode === "system" ? "◐" : theme === "dark" ? "☼" : "☾"}</span><span className="themeToggleLabel">{themeMode === "system" ? "System" : theme === "dark" ? "Light" : "Dark"}</span></button></div></header>
+    <div className="coachStandaloneIntro"><div className="eyebrow">PERSONAL FINANCE, EXPLAINED</div><h1>Talk through your next money decision.</h1><p>Ask a question, follow up naturally, and see the numbers behind each explanation.</p></div>
+    <div className="coachStandaloneGrid"><CoachReports financials={financials} spendingByCategory={spendingByCategory} hasRecords={income.length + expenses.length + loans.length + investments.length + goals.length + insurance.length > 0} /><section className="card coachStandaloneChat" aria-label="FinBuddy AI Coach"><CoachChat messages={chatMessages} question={question} onQuestionChange={value=>{setQuestion(value);setCoachError("")}} onSend={()=>void askFinBuddy()} onReview={()=>void askFinBuddy("Review my finances and tell me the main areas I should review next. Use only the facts in my FinBuddy data.","review")} onNewChat={()=>{setChatMessages([]);setQuestion("");setAnswer("");setAnswerGrounding("");setCoachError("")}} isLoading={aiLoading} error={coachError} financials={financials} loans={loans} investments={investments} goals={goals} insurance={insurance} showVisuals={false} /></section></div>
+    <footer className="coachStandaloneFooter">Numbers and charts are calculated from your saved records. Recent conversation turns stay in this page session and are sent to the configured AI provider for follow-up context; they are not saved to your account. Educational guidance only.</footer>
+  </main>;
 
   return (
     <main className="shell">
-      <header className="appHeader"><div className="headerInner"><div className="brandWrap"><div className="brandSymbol" aria-hidden="true">✦</div><div><div className="brand">DhanView</div><div className="tag">Personal finance &amp; planning</div></div></div><div className="headerActions"><button className="themeToggle" type="button" onClick={toggleTheme} aria-label={`Theme is ${themeMode}; switch to ${themeMode === "system" ? "light" : themeMode === "light" ? "dark" : "system"}`} title={`Theme: ${themeMode}. Click to switch to ${themeMode === "system" ? "light" : themeMode === "light" ? "dark" : "system"}.`}><span aria-hidden="true">{themeMode === "system" ? "◐" : theme === "dark" ? "☼" : "☾"}</span><span className="themeToggleLabel">{themeMode === "system" ? "System" : theme === "dark" ? "Light" : "Dark"}</span></button><div className="secureBadge"><span>●</span> Secure</div><div className="profileArea"><button className="profileButton" onClick={()=>setProfileMenu(v=>!v)} aria-expanded={profileMenu}><span className="profileAvatar">{(profile.name||"A").charAt(0).toUpperCase()}</span><span className="profileButtonText">{profile.name || "Profile"}</span><span className="profileChevron">{profileMenu?"⌃":"⌄"}</span></button>{profileMenu && <div className="profileMenu"><button className="profileMenuUser profileMenuUserButton" onClick={()=>{setProfileMenu(false);openModal("profile");}}><span className="profileMenuAvatar">{(profile.name||"A").charAt(0).toUpperCase()}</span><span><strong>{profile.name||"Your profile"}</strong><small>Personal account</small></span></button><div className="profileMenuDivider"/><button className="profileMenuItem" onClick={()=>{setProfileMenu(false);openModal("profile");}}>👤 <span>Profile settings</span></button><button className="profileMenuItem" onClick={()=>{setProfileMenu(false);openModal("security");}}>🔐 <span>Account & security</span></button><button className="profileMenuItem signOut" onClick={handleSignOut}>↪ <span>Sign out</span></button></div>}</div></div></div></header>
+      <header className="appHeader"><div className="headerInner"><div className="brandWrap"><div className="brandSymbol" aria-hidden="true">✦</div><div><div className="brand">FinBuddy</div><div className="tag">PERSONAL FINANCE, MADE CLEAR</div></div></div><nav className="workspaceNav" aria-label="Main sections"><div className="sideNavLabel">WORKSPACE</div><a href="#overview"><span className="sideNavIcon">▦</span>Dashboard</a><a href="#reminders"><span className="sideNavIcon">◷</span>Reminders<span className="sideNavCount">{financialReminderRows.filter((item)=>!item.completed).length}</span></a><a href="#planning"><span className="sideNavIcon">⌂</span>Planning</a><a href="#portfolio"><span className="sideNavIcon">▤</span>Portfolio</a><a href={`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/?view=coach`} onClick={event=>{if(!event.metaKey&&!event.ctrlKey&&!event.shiftKey&&!event.altKey){event.preventDefault();openCoachWindow();}}}><span className="sideNavIcon">✦</span>FinBuddy Coach</a><Link href="/release-notes/"><span className="sideNavIcon">↗</span>Release notes</Link></nav><div className="headerActions"><button className="themeToggle" type="button" onClick={toggleTheme} aria-label={`Theme is ${themeMode}; switch to ${themeMode === "system" ? "light" : themeMode === "light" ? "dark" : "system"}`} title={`Theme: ${themeMode}. Click to switch to ${themeMode === "system" ? "light" : themeMode === "light" ? "dark" : "system"}.`}><span aria-hidden="true">{themeMode === "system" ? "◐" : theme === "dark" ? "☼" : "☾"}</span><span className="themeToggleLabel">{themeMode === "system" ? "System" : theme === "dark" ? "Light" : "Dark"}</span></button><div className="secureBadge"><span>●</span> Secure</div><div className="profileArea"><button className="profileButton" onClick={()=>setProfileMenu(v=>!v)} aria-expanded={profileMenu}><span className="profileAvatar">{(profile.name||"A").charAt(0).toUpperCase()}</span><span className="profileButtonText">{profile.name || "Profile"}</span><span className="profileChevron">{profileMenu?"⌃":"⌄"}</span></button>{profileMenu && <div className="profileMenu"><button className="profileMenuUser profileMenuUserButton" onClick={()=>{setProfileMenu(false);openModal("profile");}}><span className="profileMenuAvatar">{(profile.name||"A").charAt(0).toUpperCase()}</span><span><strong>{profile.name||"Your profile"}</strong><small>Personal account</small></span></button><div className="profileMenuDivider"/><button className="profileMenuItem" onClick={()=>{setProfileMenu(false);openModal("profile");}}>👤 <span>Profile settings</span></button><button className="profileMenuItem" onClick={()=>{setProfileMenu(false);openModal("security");}}>🔐 <span>Account & security</span></button><button className="profileMenuItem signOut" onClick={handleSignOut}>↪ <span>Sign out</span></button></div>}</div></div></div></header>
 
-      <section className="hero" id="overview"><div><div className="eyebrow">YOUR MONEY, ONE PLACE</div><h1>Hi {profile.name || "there"} 👋<br/>Let&apos;s understand your money.</h1><p>Track cash flow, investments, loans, protection and goals. DhanView keeps the calculations deterministic and uses AI to explain what the numbers mean.</p></div><div className="heroActions"><button className="primary" onClick={()=>openModal("transaction")}>＋ Add transaction</button><button className="secondary" onClick={()=>openModal("profile")}>Edit profile</button></div></section>
+      <section className="hero" id="overview"><div><div className="eyebrow">YOUR MONEY, ONE PLACE</div><h1>Hi {profile.name || "there"} 👋<br/>Let&apos;s understand your money.</h1><p>Track cash flow, investments, loans, protection and goals. FinBuddy keeps the calculations deterministic and uses AI to explain what the numbers mean.</p></div><div className="heroActions"><button className="primary" onClick={()=>openModal("transaction")}>＋ Add transaction</button><button className="secondary" onClick={()=>openCoachWindow()}>✦ Ask FinBuddy</button><button className="secondary" onClick={()=>openModal("profile")}>Edit profile</button></div></section>
 
       {legacyDataAvailable && <section className="card" role="status" style={{ marginTop: 20, padding: 20 }}><div className="eyebrow">OLDER BROWSER DATA</div><h2>We found data from an earlier Artha version</h2><p>It remains in this browser and has not been uploaded. You can leave it here, or explicitly copy profile and portfolio records into this signed-in account. The local copy will be kept.</p><button className="primary" type="button" onClick={importLegacyData} disabled={legacyImportBusy}>{legacyImportBusy ? "Importing…" : "Review and import older data"}</button></section>}
 
-      <nav className="sectionNav" aria-label="Main sections">
-        <a href="#overview">Overview</a>
-        <a href="#planning">Planning</a>
-        <a href="#portfolio">Portfolio</a>
-        <a href="#ai-coach">AI Coach</a>
-        <Link href="/release-notes/">Release notes</Link>
-      </nav>
-
-      <section className="planningSection" id="planning">
-        <div className="planningHeading">
-          <div>
-            <div className="eyebrow">PLAN YOUR NEXT MOVE</div>
-            <h2>Make your next big decision with confidence.</h2>
-            <p>Choose a life goal and DhanView will use your financial picture to help you explore the trade-offs.</p>
-          </div>
-          <span className="planningBadge">Portfolio-aware guidance</span>
+      <section className="card remindersPanel" id="reminders" aria-labelledby="reminders-title">
+        <div className="blockhead remindersHead">
+          <div><div className="eyebrow">UPCOMING DATES</div><h2 id="reminders-title">Reminders &amp; renewals</h2><p>Track upcoming bill tasks, insurance renewals, and goal dates. Personal reminders stay in this browser.</p></div>
+          <button className="primary" type="button" onClick={()=>setShowReminderForm((current)=>!current)}>{showReminderForm ? "Cancel" : "+ Add reminder"}</button>
         </div>
-        <div className="planningGrid">
-          {[
-            ["⌂", "Home planning", "Explore a home budget, down payment, EMI and affordability.", "Help me plan a home purchase. Assess an appropriate property budget, down payment, loan amount, EMI, upfront costs and the impact on my cash flow, emergency fund and other goals. Ask me for any missing information."],
-            ["▣", "Car planning", "Compare purchase price, EMI and total ownership cost.", "Help me plan a car purchase. Evaluate on-road price, down payment, loan EMI, fuel, insurance, maintenance and total ownership cost. Check the impact on my savings, emergency fund and other goals. Ask for missing information."],
-            ["◎", "Goal planning", "Turn a target amount and timeline into a savings plan.", "Help me create a goal-based savings plan. Review my existing goals and portfolio, calculate the monthly contribution needed for a target and timeline, and explain assumptions and trade-offs. Ask me for missing information."],
-            ["⇄", "Debt planning", "Prioritise repayments and compare prepayment scenarios.", "Review my debts and help me build a repayment strategy. Compare avalanche and snowball approaches, EMI changes and prepayment scenarios using my actual loan data. Explain any assumptions and ask for missing information."],
-            ["◇", "Financial safety", "Review emergency savings, insurance and cash-flow resilience.", "Run a financial safety review using my DhanView data. Assess emergency fund coverage, debt exposure, insurance information and cash-flow resilience. Identify missing information and prioritise practical next steps."],
-            ["↗", "Retirement planning", "Estimate your future needs and long-term savings gap.", "Help me plan for retirement. Estimate inflation-adjusted future expenses and the savings gap using my age, existing investments and goals where available. Clearly label assumptions and ask for missing information."]
-          ].map(([icon, title, description, prompt], index) => (
-            <button className="planningCard" key={title} onClick={() => {
-              setQuestion(prompt);
-              setAnswer("");
-              setError("");
-              document.getElementById("ai-coach")?.scrollIntoView({ behavior: "smooth", block: "start" });
-            }}>
-              <span className="planningArt" aria-hidden="true" style={{ backgroundImage: `url("${process.env.NEXT_PUBLIC_BASE_PATH || ""}/planning/${planningBackgrounds[index]}")` }} />
-              <span className="planningIcon" aria-hidden="true">{icon}</span>
-              <strong>{title}</strong>
-              <span>{description}</span>
-              <em>Plan with DhanView <b>→</b></em>
-            </button>
-          ))}
-        </div>
-        <p className="planningDisclaimer">Planning guidance is educational, depends on the information you provide, and is not a loan approval or guaranteed financial outcome.</p>
+        {showReminderForm && <form className="reminderForm" onSubmit={saveReminder}>
+          <Field label="Reminder"><input required maxLength={120} value={reminderTitle} onChange={(event)=>setReminderTitle(event.target.value)} placeholder="e.g. Pay electricity bill" /></Field>
+          <Field label="Category"><select value={reminderCategory} onChange={(event)=>setReminderCategory(event.target.value)}>{["Bill payment", "Loan payment", "Tax due", "Insurance", "Goal", "Other"].map((item)=><option key={item}>{item}</option>)}</select></Field>
+          <Field label="Due date"><input required type="date" value={reminderDate} onChange={(event)=>setReminderDate(event.target.value)} /></Field>
+          <button className="primary reminderSave" type="submit">Save reminder</button>
+        </form>}
+        {financialReminderRows.length ? <div className="reminderList">{financialReminderRows.slice(0, 6).map((item)=>{
+          const daysLeft = Math.round((new Date(`${item.dueDate}T00:00:00`).getTime() - new Date(`${todayLocalDate()}T00:00:00`).getTime()) / 86400000);
+          const timing = daysLeft < 0 ? `Overdue by ${Math.abs(daysLeft)} day${Math.abs(daysLeft) === 1 ? "" : "s"}` : daysLeft === 0 ? "Due today" : `In ${daysLeft} day${daysLeft === 1 ? "" : "s"}`;
+          return <article className={`reminderRow ${daysLeft < 0 ? "reminderLate" : ""}`} key={item.id}>
+            <div className="reminderDate"><b>{new Date(`${item.dueDate}T12:00:00`).getDate()}</b><span>{new Date(`${item.dueDate}T12:00:00`).toLocaleDateString("en-IN", { month: "short" })}</span></div>
+            <div className="reminderText"><b>{item.title}</b><span>{item.category} · {new Date(`${item.dueDate}T12:00:00`).getFullYear()}</span></div>
+            <span className={`reminderTiming ${daysLeft < 0 ? "late" : daysLeft <= 7 ? "soon" : ""}`}>{timing}</span>
+            {item.source === "manual" && <div className="reminderActions"><button type="button" onClick={()=>setReminders((current)=>current.map((reminder)=>reminder.id === item.id ? { ...reminder, completed: true } : reminder))}>Done</button><button type="button" aria-label={`Delete reminder ${item.title}`} onClick={()=>setReminders((current)=>current.filter((reminder)=>reminder.id !== item.id))}>×</button></div>}
+          </article>;
+        })}</div> : <Empty text="No upcoming dates yet. Add a reminder or add an insurance renewal or goal target date to see it here." />}
+        <small className="reminderPrivacy">Reminders you create are saved on this device and are not synced to Supabase.</small>
       </section>
+
+
 
       {error && <div className="error pageError">{error}<button onClick={()=>setError("")}>×</button></div>}
       {toast && <div className="toast">✓ {toast}</div>}
@@ -1293,6 +1551,33 @@ export default function Home() {
           <div className="healthNotes"><div><b>Emergency target</b><span>{financials.essentialMonthlyExpenses > 0 ? `${money(financials.emergencyFundTarget3Months)}–${money(financials.emergencyFundTarget6Months)}` : "Add essential expenses to estimate"}</span></div><div><b>Goal funding</b><span>{goals.length ? financials.health.goalFunding === "covered" ? "Current free cash flow covers required goal contributions." : "Required goal contributions need review against current free cash flow." : "Add a financial goal to assess funding."}</span></div></div>
         </> : <Empty text="Your financial health metrics will appear after you add portfolio or profile details. Nothing is assumed or saved for you." />}
         <div className="runRateReview"><div><div className="eyebrow">12-MONTH RUN RATE</div><strong>{hasCashFlowInputs ? money(financials.freeCashFlow * 12) : "—"}</strong><span>Annual free cash flow at today&apos;s pace</span></div><p>This is a simple estimate based on your current monthly entries staying the same. It is not a forecast of changing income or costs.</p></div>
+      </section>
+
+      <section className="planningSection" id="planning">
+        <div className="planningHeading">
+          <div>
+            <div className="eyebrow">PLAN YOUR NEXT MOVE</div>
+            <h2>Make your next big decision with confidence.</h2>
+            <p>Choose a life goal and FinBuddy will use your financial picture to help you explore the trade-offs.</p>
+          </div>
+          <span className="planningBadge">Portfolio-aware guidance</span>
+        </div>
+        <div className="planningGrid">
+          {planningPrompts.map(([icon, title, description, prompt], index) => (
+            <button className="planningCard" key={title} onClick={() => {
+              setAnswer("");
+              setCoachError("");
+              openCoachWindow(prompt);
+            }}>
+              <span className="planningArt" aria-hidden="true" style={{ backgroundImage: `url("${process.env.NEXT_PUBLIC_BASE_PATH || ""}/planning/${planningBackgrounds[index]}")` }} />
+              <span className="planningIcon" aria-hidden="true">{icon}</span>
+              <strong>{title}</strong>
+              <span>{description}</span>
+              <em>Plan with FinBuddy <b>→</b></em>
+            </button>
+          ))}
+        </div>
+        <p className="planningDisclaimer">Planning guidance is educational, depends on the information you provide, and is not a loan approval or guaranteed financial outcome.</p>
       </section>
 
       <section className="card portfolioPanel" id="portfolio" aria-labelledby="portfolio-title">
@@ -1314,7 +1599,7 @@ export default function Home() {
           {portfolioTab === "goals" && <><div className="listSummary"><div><span>Total saved toward goals</span><strong>{goals.length ? money(financials.goals.reduce((total, goal) => total + goal.currentAmount, 0)) : "—"}</strong></div><small>{goals.length ? `${money(financials.goals.reduce((total, goal) => total + goal.targetAmount, 0))} target total · ${money(financials.goals.reduce((total, goal) => total + goal.requiredMonthlyContribution, 0))}/mo needed across all goals` : "Add goals to track targets and monthly contributions"}</small></div>{goals.length>0 && <button className="listToggle" type="button" aria-expanded={showAllGoals} aria-controls="goal-records" onClick={()=>setShowAllGoals(v=>!v)}>{showAllGoals?"Hide goals":`Manage goals (${goals.length})`}</button>}{goals.length===0 && <Empty text="No goals added yet." />}<div id="goal-records" hidden={!showAllGoals}>{financials.goals.map((item,index)=>{const storedGoal=goals.find(g=>g.name===item.name && g.targetAmount===item.targetAmount && g.currentAmount===item.currentAmount && g.targetDate===item.targetDate) || goals[index];return <div className="goal" key={storedGoal?.id || `${item.name}-${index}`}><div><b>{item.name}</b><small>{money(item.currentAmount)} of {money(item.targetAmount)} · {item.progress.toFixed(0)}% · {item.monthsRemaining} months left</small></div><div className="goalValue">{money(item.requiredMonthlyContribution)}/mo</div><div className="progress"><i style={{width:`${item.progress}%`}}/></div><div className="goalActions"><Actions onEdit={()=>storedGoal && openModal("goal",storedGoal)} onDelete={()=>{if(storedGoal?.id) removeRow("goals",storedGoal.id);}}/></div></div>})}</div></>}
         </div>
       </section>
-      <section className="wideGrid"><div className="card block"><div className="blockhead"><div><div className="eyebrow">SPENDING PATTERN</div><h2>Where your recurring money goes</h2><p>Monthly normalized values from your expense records.</p></div></div>{spendingByCategory.length ? <div className="categoryBars">{spendingByCategory.map(([category, amount])=><div className="categoryBar" key={category}><div><span>{category}</span><b>{money(amount)}</b></div><div className="barTrack"><i style={{width:`${Math.min(100,(amount/Math.max(1,spendingByCategory[0][1]))*100)}%`}}/></div></div>)}</div> : <Empty text="Add expenses to see spending patterns." />}</div><div className="card block"><div className="blockhead"><div><div className="eyebrow">SCENARIO LAB</div><h2>What if I save more?</h2><p>A simple deterministic scenario. The amount is kept in this browser only after you change it.</p></div></div>{hasCashFlowInputs ? <><label className="label">Extra monthly saving <b>{money(scenarioExtra)}</b></label><input className="range" type="range" min="0" max="50000" step="1000" value={scenarioExtra} onChange={e=>updateScenarioExtra(numberValue(e.target.value))}/><div className="scenarioCards"><Metric label="Next free cash flow" value={money(scenario.nextFreeCashFlow)} /><Metric label="Emergency months after 12 mo" value={financials.essentialMonthlyExpenses > 0 ? `${scenario.nextEmergencyMonths.toFixed(1)} mo` : "—"} /><Metric label="Cash after goal contributions" value={goals.length ? money(scenario.cashAfterGoals) : "—"} /></div><small className="scenarioNote">Combined monthly goal contributions: {money(scenario.goalContributionNeed)}. Monthly investment contributions of {money(financials.investmentContributions)} are already counted in free cash flow.</small><button className="secondary fullScenario" onClick={()=>{openModal("scenario");setAnswer("");}}>Ask DhanView to explain</button></> : <Empty text="Add income, expenses, loans, or investments before running a scenario." />}</div></section>
+      <section className="wideGrid"><div className="card block"><div className="blockhead"><div><div className="eyebrow">SPENDING PATTERN</div><h2>Where your recurring money goes</h2><p>Monthly normalized values from your expense records.</p></div></div>{spendingByCategory.length ? <div className="categoryBars">{spendingByCategory.map(([category, amount])=><div className="categoryBar" key={category}><div><span>{category}</span><b>{money(amount)}</b></div><div className="barTrack"><i style={{width:`${Math.min(100,(amount/Math.max(1,spendingByCategory[0][1]))*100)}%`}}/></div></div>)}</div> : <Empty text="Add expenses to see spending patterns." />}</div><div className="card block"><div className="blockhead"><div><div className="eyebrow">SCENARIO LAB</div><h2>What if I save more?</h2><p>A simple deterministic scenario. The amount is kept in this browser only after you change it.</p></div></div>{hasCashFlowInputs ? <><label className="label">Extra monthly saving <b>{money(scenarioExtra)}</b></label><input className="range" type="range" min="0" max="50000" step="1000" value={scenarioExtra} onChange={e=>updateScenarioExtra(numberValue(e.target.value))}/><div className="scenarioCards"><Metric label="Next free cash flow" value={money(scenario.nextFreeCashFlow)} /><Metric label="Emergency months after 12 mo" value={financials.essentialMonthlyExpenses > 0 ? `${scenario.nextEmergencyMonths.toFixed(1)} mo` : "—"} /><Metric label="Cash after goal contributions" value={goals.length ? money(scenario.cashAfterGoals) : "—"} /></div><small className="scenarioNote">Combined monthly goal contributions: {money(scenario.goalContributionNeed)}. Monthly investment contributions of {money(financials.investmentContributions)} are already counted in free cash flow.</small><button className="secondary fullScenario" onClick={()=>{openModal("scenario");setAnswer("");}}>Ask FinBuddy to explain</button></> : <Empty text="Add income, expenses, loans, or investments before running a scenario." />}</div></section>
 
       <section className="card monthTracker" id="transactions" aria-labelledby="month-tracker-title">
         <div className="blockhead monthTrackerHead">
@@ -1349,14 +1634,14 @@ export default function Home() {
         </>}
       </section>
 
-      <section className="card coach" id="ai-coach"><div className="coachIntro"><div><div className="eyebrow">✦ DHANVIEW AI COACH</div><h2>Ask DhanView anything about your money.</h2><p>DhanView uses your recorded data and calculated summaries to explain your finances. Debt questions include only loan type, balance, rate, EMI and remaining term; other questions use calculated summaries. Login credentials are never sent. The Financial Engine remains the source of truth; answers that fail fact checks fall back to engine guidance.</p></div><div className="coachMark">✦</div></div><div className="promptSuggestions"><span className="suggestionLabel">Try asking</span><div className="prompts">{prompts.map(([icon,title,text])=><button className={`prompt ${question===text?"selected":""}`} key={title} onClick={()=>{setQuestion(text);setAnswer("");setError("")}}><em aria-hidden="true">{icon}</em><strong>{title}</strong></button>)}</div></div><label className="label" htmlFor="coach-question">Or ask your own question</label><textarea id="coach-question" value={question} onChange={e=>setQuestion(e.target.value)} onKeyDown={event=>{if((event.ctrlKey||event.metaKey)&&event.key==="Enter"){event.preventDefault();if(!aiLoading) void askDhanView();}}} placeholder="Example: How should I balance my emergency fund and investing?" rows={5}/><small className="note">DhanView uses <code>NEXT_PUBLIC_AI_ENDPOINT</code> when configured, including on localhost. Otherwise it uses the local Ollama gateway at <code>http://localhost:8787/api/coach</code>. If a local model is unavailable or an AI answer fails checks, DhanView shows deterministic engine guidance.</small><small className="note">Press Ctrl+Enter (or Cmd+Enter) to send your question with your DhanView financial context.</small><div className="coachActions"><button className="primary" disabled={aiLoading} onClick={()=>askDhanView()}>{aiLoading?"DhanView is thinking…":"Ask DhanView for guidance →"}</button><button className="secondary" disabled={aiLoading} onClick={()=>askDhanView("Review my finances and tell me the main areas I should review next. Use only the facts in my DhanView data.","review")}>Run financial review</button></div>{answer && <AiResponse answer={answer} grounding={answerGrounding} />}<small className="note">Educational guidance only. DhanView is not a SEBI-registered investment adviser or IRDAI insurance intermediary. Always verify product-specific decisions and current rules independently.</small></section>
+      
 
-      <footer className="footer"><div><strong>DhanView</strong><span>Personal finance &amp; planning</span><Link href="/release-notes/">Release notes <span aria-hidden="true">↗</span></Link></div><div>Built with <span aria-label="love">♥</span> by <b>Harish Sarma</b> · © 2026</div></footer>
+      <footer className="footer"><div><strong>FinBuddy</strong><span>Personal finance &amp; planning</span><Link href="/release-notes/">Release notes <span aria-hidden="true">↗</span></Link></div><div>Built with <span aria-label="love">♥</span> by <b>Harish Sarma</b> · © 2026</div></footer>
 
       {modal === "profile" && <Modal title="Profile settings" close={closeModal} save={saveModal} busy={saveBusy} error={error}><div className="formGrid two"><Field label="Your name"><input value={form.name||""} onChange={e=>setField("name",e.target.value)}/></Field><Field label="Age"><input type="number" min="18" max="100" value={form.age||""} onChange={e=>setField("age",e.target.value)}/></Field><Field label="Dependents"><input type="number" min="0" value={form.dependents||""} onChange={e=>setField("dependents",e.target.value)}/></Field><Field label="Country"><input value={form.country||""} onChange={e=>setField("country",e.target.value)} placeholder="Optional"/></Field><Field label="Primary goal"><select value={form.primaryGoal||""} onChange={e=>setField("primaryGoal",e.target.value)}><option value="">Not set</option>{["Build emergency fund","Save for marriage","Invest more","Pay off debt","Major purchase","Build wealth","Other"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Risk profile"><select value={form.riskProfile||""} onChange={e=>setField("riskProfile",e.target.value)}><option value="">Not assessed</option>{["Conservative","Moderate","Aggressive"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Investment horizon"><select value={form.investmentHorizon||""} onChange={e=>setField("investmentHorizon",e.target.value)}><option value="">Not set</option>{["< 1 year","1–3 years","3–5 years","5+ years"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Liquid emergency savings"><input type="number" min="0" value={form.cashSavings||""} onChange={e=>setField("cashSavings",e.target.value)}/></Field><Field label="Life / term cover"><input type="number" min="0" value={form.lifeCover||""} onChange={e=>setField("lifeCover",e.target.value)}/></Field><Field label="Health cover"><input type="number" min="0" value={form.healthCover||""} onChange={e=>setField("healthCover",e.target.value)}/></Field></div></Modal>}
       {modal === "security" && <Modal title="Account & security" close={closeModal} save={updatePassword} busy={false}><div className="securityPanel"><div className="securityItem"><span>Signed-in email</span><b>{authEmail || "Authenticated account"}</b></div><div className="securityItem"><span>Data protection</span><b>Supabase Auth + Postgres RLS</b></div><div className="securityItem"><span>Change password</span><b>Updates your current account password</b></div><Field label="New password"><input type="password" minLength={8} value={securityPassword} onChange={e=>setSecurityPassword(e.target.value)} placeholder="At least 8 characters"/></Field><Field label="Confirm new password"><input type="password" minLength={8} value={securityConfirm} onChange={e=>setSecurityConfirm(e.target.value)} placeholder="Re-enter password"/></Field></div></Modal>}
       {(modal === "income" || modal === "expense" || modal === "investment" || modal === "loan" || modal === "insurance" || modal === "goal" || modal === "transaction") && <DataModal type={modal} form={form} setField={setField} saveModal={saveModal} closeModal={closeModal} busy={saveBusy} error={error} autoCategorize={modal === "transaction" ? autoCategorize : undefined} categorizing={categorizing} />}
-      {modal === "scenario" && <Modal title="Scenario explanation" close={closeModal} wide><div className="scenarioExplain"><div className="scenarioCards"><Metric label="Extra saving" value={money(scenarioExtra)} /><Metric label="Next free cash flow" value={money(scenario.nextFreeCashFlow)} /><Metric label="After goal contributions" value={goals.length ? money(scenario.cashAfterGoals) : "—"} /><Metric label="Emergency cover after 12 mo" value={`${scenario.nextEmergencyMonths.toFixed(1)} months`} /></div><button className="primary" disabled={aiLoading} onClick={()=>askDhanView(`I am considering adding ${money(scenarioExtra)} of extra monthly savings. Explain what this changes in my current DhanView financial picture, including cash flow, emergency fund coverage and goal funding. Use the engine facts only.`,"scenario",{...scenario,extraMonthlySaving:scenarioExtra})}>{aiLoading?"DhanView is thinking…":"Ask DhanView to explain this scenario →"}</button>{answer && <AiResponse answer={answer} grounding={answerGrounding} />}</div></Modal>}
+      {modal === "scenario" && <Modal title="Scenario explanation" close={closeModal} wide><div className="scenarioExplain"><div className="scenarioCards"><Metric label="Extra saving" value={money(scenarioExtra)} /><Metric label="Next free cash flow" value={money(scenario.nextFreeCashFlow)} /><Metric label="After goal contributions" value={goals.length ? money(scenario.cashAfterGoals) : "—"} /><Metric label="Emergency cover after 12 mo" value={`${scenario.nextEmergencyMonths.toFixed(1)} months`} /></div><button className="primary" disabled={aiLoading} onClick={()=>askFinBuddy(`I am considering adding ${money(scenarioExtra)} of extra monthly savings. Explain what this changes in my current FinBuddy financial picture, including cash flow, emergency fund coverage and goal funding. Use the engine facts only.`,"scenario",{...scenario,extraMonthlySaving:scenarioExtra})}>{aiLoading?"FinBuddy is thinking…":"Ask FinBuddy to explain this scenario →"}</button>{answer && <AiResponse answer={answer} grounding={answerGrounding} />}</div></Modal>}
     </main>
   );
 }
@@ -1389,7 +1674,7 @@ function Modal({title,close,save,busy,children,wide=false,error}:{title:string;c
 
 function DataModal({type,form,setField,saveModal,closeModal,busy,error,autoCategorize,categorizing}:{type:ModalType;form:FormState;setField:(k:string,v:string|number)=>void;saveModal:()=>void;closeModal:()=>void;busy:boolean;error?:string;autoCategorize?:()=>void;categorizing?:boolean}){
   const titles:Record<string,string>={income:"Add income",expense:"Add expense",investment:"Add investment",loan:"Add loan",insurance:"Add insurance",goal:"Add financial goal",transaction:"Add transaction"};
-  return <Modal title={titles[type]||"DhanView"} close={closeModal} save={saveModal} busy={busy} error={error} wide={type==="investment"||type==="transaction"}><div className="formGrid two">
+  return <Modal title={titles[type]||"FinBuddy"} close={closeModal} save={saveModal} busy={busy} error={error} wide={type==="investment"||type==="transaction"}><div className="formGrid two">
     {type==="income" && <><Field label="Source"><input value={form.name||""} onChange={e=>setField("name",e.target.value)} placeholder="Salary, rent, freelance…"/></Field><Field label="Description"><select value={form.type||"Salary"} onChange={e=>setField("type",e.target.value)}>{incomeTypes.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Amount"><input type="number" min="0" value={form.amount||""} onChange={e=>setField("amount",e.target.value)}/></Field><Field label="Frequency"><select value={form.frequency||"Monthly"} onChange={e=>setField("frequency",e.target.value)}>{frequencies.map(v=><option key={v}>{v}</option>)}</select></Field></>}
     {type==="expense" && <><Field label="Description"><input value={form.name||""} onChange={e=>setField("name",e.target.value)} placeholder="Rent, groceries…"/></Field><Field label="Category"><select value={form.category||"Housing"} onChange={e=>setField("category",e.target.value)}>{expenseCategories.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Amount"><input type="number" min="0" value={form.amount||""} onChange={e=>setField("amount",e.target.value)}/></Field><Field label="Frequency"><select value={form.frequency||"Monthly"} onChange={e=>setField("frequency",e.target.value)}>{frequencies.map(v=><option key={v}>{v}</option>)}</select></Field></>}
     {type==="investment" && <><Field label="Name"><input value={form.name||""} onChange={e=>setField("name",e.target.value)} placeholder="SBI ELSS, stock…"/></Field><Field label="Type"><select value={form.type||"Mutual Fund"} onChange={e=>setField("type",e.target.value)}>{investmentTypes.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Category"><select value={form.category||"Equity"} onChange={e=>setField("category",e.target.value)}>{investmentCategories.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Mode"><select value={form.mode||"SIP"} onChange={e=>setField("mode",e.target.value)}>{["SIP","Lump sum","Employer","Other"].map(v=><option key={v}>{v}</option>)}</select></Field><Field label="Monthly contribution"><input type="number" min="0" value={form.monthlyAmount||""} onChange={e=>setField("monthlyAmount",e.target.value)}/></Field><Field label="Total invested"><input type="number" min="0" value={form.investedAmount||""} onChange={e=>setField("investedAmount",e.target.value)}/></Field><Field label="Current value"><input type="number" min="0" value={form.currentValue||""} onChange={e=>setField("currentValue",e.target.value)}/></Field><Field label="Start date"><input type="date" value={form.startDate||""} onChange={e=>setField("startDate",e.target.value)}/></Field></>}

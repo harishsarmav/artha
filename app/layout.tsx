@@ -3,8 +3,8 @@ import "./globals.css";
 import { ThemeSync } from "./theme-sync";
 
 export const metadata: Metadata = {
-  title: "DhanView — Personal finance & planning",
-  description: "A thoughtful personal finance and life planning workspace.",
+  title: "FinBuddy — Personal finance, made clear",
+  description: "A private personal finance workspace for spending, saving, goals, and reminders.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

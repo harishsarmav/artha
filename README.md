@@ -1,6 +1,6 @@
-# DhanView v0.7
+# FinBuddy v0.7
 
-DhanView is a personal finance workspace built around one core rule: **the Financial Engine calculates facts; AI explains them.**
+FinBuddy is a personal finance workspace built around one core rule: **the Financial Engine calculates facts; AI explains them.**
 
 ## Included in v0.7
 
@@ -90,4 +90,12 @@ The dashboard never adds loan EMI twice. Monthly outflow is living expenses + de
 
 ## Supabase Free plan availability
 
-Supabase Free projects may pause after a period of inactivity. DhanView does not run artificial keep-alive pings or background scripts. This is a Supabase plan limitation, not a frontend bug. For uninterrupted production availability, move the project to a paid Supabase plan; otherwise resume it from the Supabase dashboard when needed and keep independent backups.
+Supabase Free projects may pause after a period of inactivity. FinBuddy does not run artificial keep-alive pings or background scripts. This is a Supabase plan limitation, not a frontend bug. For uninterrupted production availability, move the project to a paid Supabase plan; otherwise resume it from the Supabase dashboard when needed and keep independent backups.
+
+## FinBuddy dashboard and reminders
+
+- The signed-in workspace uses a compact navy navigation rail with responsive mobile navigation and the existing system/light/dark theme setting.
+- Reminder cards combine user-created tasks with upcoming insurance renewal and goal target dates already recorded in the account.
+- User-created reminders are stored in browser local storage under the signed-in user's ID. They are not transferred to Supabase and do not require a database migration. Clearing browser site data can remove them.
+- Reminder dates are shown in the app; this version does not promise background or scheduled push notifications.
+- The existing profile, portfolio, financial calculations, Supabase authentication, AI gateway, CSV import, month/year transaction views, and release notes remain part of the app.
